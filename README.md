@@ -4,7 +4,7 @@
 🚀 Запуск
 Bash
 
-curl -sSL https://raw.githubusercontent.com/sheikerdc-del/VPS-PRO-MONOLITH/main/vps_monolith.sh | sudo bash
+curl -sSL [https://raw.githubusercontent.com/sheikerdc-del/VPS-PRO-MONOLITH/main/vps_monolith.sh](https://raw.githubusercontent.com/sheikerdc-del/VPS-PRO-MONOLITH/main/vps_monolith.sh) | sudo bash
 
 > One-shot bootstrap для развёртывания **production-ready private cloud** на чистом Ubuntu-сервере.
 
