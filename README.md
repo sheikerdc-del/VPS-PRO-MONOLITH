@@ -1,166 +1,267 @@
-# VPS Ultimate Monolith: Traefik Edition
+# VPS PRO MONOLITH
 
-🚀 **VPS Ultimate Monolith** — это полный стек автоматизации для Ubuntu 22.04 / 24.04.  
-Скрипт разворачивает более **30 инструментов и сервисов**, включая Docker, Traefik, Supabase, Coolify, Amnezia VPN, MTProto Proxy, Portainer, Uptime Kuma, Dev Tools и бэкапы.
+> One-shot bootstrap для развёртывания **production-ready private cloud** на чистом Ubuntu-сервере.
 
----
-
-## 📌 Особенности
-
-- TUI-выбор компонентов через **Gum Wizard**  
-- Поддержка **unattended mode** через переменные окружения  
-- Разделение портов для **Supabase** и **Coolify** через **Traefik**  
-- Авто-настройка **SSH**, **Firewall (UFW)** и **Fail2Ban**  
-- Бэкапы PostgreSQL с ротацией  
-- Поддержка Amnezia VPN и MTProto Proxy  
-- Dev Tools: Node.js, Python, Go, Rust  
-- Docker Watchtower для автоматического обновления контейнеров  
-- Telegram уведомления
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Ubuntu](https://img.shields.io/badge/Ubuntu-22.04%20%7C%2024.04-E95420)]()
+[![Docker](https://img.shields.io/badge/Docker-supported-2496ED)]()
+[![Status](https://img.shields.io/badge/status-stable-brightgreen)]()
+[![Release](https://img.shields.io/badge/release-v1.0-informational)]()
 
 ---
 
-## ⚙️ Системные требования
+## Overview
 
-- Ubuntu 22.04 / 24.04 (x86_64)  
-- Минимум 2 CPU, 4GB RAM, 20GB диска  
-- Root доступ или `sudo -i`  
-- Открытые порты: 22/2222, 80, 443, 9443, 3001, 8000+
+**VPS PRO MONOLITH** — это полностью автоматизированный установщик, который за один запуск превращает чистый VPS в:
+
+* self-hosted **PaaS + BaaS**
+* защищённый **private cloud**
+* готовую **Dev/Prod инфраструктуру**
+* систему **мониторинга, VPN и бэкапов**
+
+Без ручной настройки Docker, reverse-proxy, SSL и безопасности.
 
 ---
 
-## 📥 Установка
+## Features
 
-## 📥 Быстрая установка (одной командой)
+### Infrastructure
 
-На сервере с root-доступом выполните:
+* Docker Engine + Compose
+* Traefik reverse proxy (auto-TLS)
+* Nginx Proxy Manager (UI)
+* Cloudflare Tunnel support
 
-```bash
-sudo bash -c "$(curl -fsSL https://github.com/sheikerdc-del/VPS-PRO-MONOLITH/main/setup.sh)"
+### PaaS / BaaS
 
-1. Клонируем репозиторий:
+* Coolify (self-hosted Vercel/Render)
+* Supabase (Auth, Postgres, Realtime, Storage)
 
-```bash
-git clone https://github.com/sheikerdc-del/VPS-PRO-MONOLITH.git
-cd vps-ultimate-monolith
-chmod +x setup.sh
-````
+### Security
 
-2. Запуск интерактивного выбора (TUI Wizard):
+* SSH hardening (port change, root disable)
+* UFW firewall + Fail2Ban
+* Unattended security updates
+* Swap provisioning
 
-```bash
-sudo ./setup.sh
+### Networking & VPN
+
+* Amnezia VPN kernel readiness
+* MTProto Telegram proxy
+
+### Monitoring
+
+* Uptime Kuma
+* Portainer
+* Watchtower auto-updates
+
+### Dev Stack
+
+* Node.js, Python, Go, Rust
+* PostgreSQL + Redis
+* CLI utility pack
+
+### Backups
+
+* Automated PostgreSQL dumps
+* Rclone cloud sync ready
+
+---
+
+## Architecture
+
 ```
-
-3. Unattended mode (без интерактивного выбора) через env переменные:
-
-```bash
-export VPS_TG_TOKEN="YOUR_BOT_TOKEN"
-export VPS_TG_CHAT="YOUR_CHAT_ID"
-sudo VPS_UNATTENDED=1 ./setup.sh
-```
-
----
-
-## 🌐 Traefik Subdomain (Supabase + Coolify)
-
-Traefik позволяет запускать **несколько веб-сервисов на одном сервере**, разделяя их по поддоменам.
-
-Пример:
-
-| Сервис   | Поддомен             | Docker-порт |
-| -------- | -------------------- | ----------- |
-| Supabase | supabase.example.com | 54321       |
-| Coolify  | coolify.example.com  | 8000        |
-
-> **Важно:** Не запускать Coolify и Supabase на одном порту напрямую, иначе будет конфликт.
-
-### Настройка `.env` для Supabase
-
-Создается автоматически при запуске скрипта в `/opt/supabase/.env`:
-
-```env
-POSTGRES_PASSWORD=<случайный_пароль>
-JWT_SECRET=<случайный_секрет>
-API_PORT=54321
-```
-
-Для Coolify порт можно изменить через `.env` или docker-compose override:
-
-```env
-COOLIFY_PORT=8001
+                Internet
+                    │
+               ┌────▼────┐
+               │ Traefik  │  ← TLS / routing
+               └────┬────┘
+        ┌───────────┼───────────┐
+        │           │           │
+     Coolify     Supabase    NPM UI
+        │           │
+   Docker Apps   Postgres/RT
+        │
+   Monitoring Stack
 ```
 
 ---
 
-## 🔐 Безопасность
+## Requirements
 
-* SSH перенесен на порт `2222`, root доступ отключен
-* Firewall (UFW) настроен на все необходимые порты
-* Fail2Ban включен для защиты от брутфорса
-* Автообновления через Unattended-Upgrades
+**Minimum:**
 
----
+* Ubuntu **22.04 / 24.04**
+* 2 CPU
+* 4 GB RAM
+* 20 GB disk
+* Root access
+* Open ports: **22, 80, 443**
 
-## 💾 Бэкапы
+**Recommended (production):**
 
-* PostgreSQL дампы создаются ежедневно в `/opt/backups`
-* Хранятся последние 7 дней
-* Можно включить Rclone для синхронизации с облаком
-
----
-
-## 🛠 Dev Tools
-
-* Node.js LTS + NPM
-* Python 3 + Pip + Venv
-* Golang
-* Rust
+* 4 CPU / 8 GB RAM
+* SSD storage
+* Dedicated IP
+* Domain name
 
 ---
 
-## 📈 Мониторинг и PaaS
+## Quick Start
 
-* **Portainer**: https://<IP>:9443
-* **Uptime Kuma**: http://<IP>:3001
-* **Supabase**: [http://supabase.example.com](http://supabase.example.com)
-* **Coolify**: [http://coolify.example.com](http://coolify.example.com)
+### Interactive install (TUI)
 
----
+```bash
+sudo bash <(curl -fsSL https://raw.githubusercontent.com/sheikerdc-del/VPS-PRO-MONOLITH/main/vps_monolith.sh)
+```
 
-## 💬 Telegram уведомления
-
-Если заданы `VPS_TG_TOKEN` и `VPS_TG_CHAT`, скрипт отправляет отчет о развернутых сервисах.
+Запустится TUI-wizard выбора компонентов.
 
 ---
 
-## ⚡ VPN
+### Unattended install
 
-* **Amnezia VPN** — модуль WireGuard + TUN
-* **MTProto Proxy** — для Telegram
+```bash
+export VPS_UNATTENDED=1
+export VPS_TG_TOKEN="BOT_TOKEN"
+export VPS_TG_CHAT="CHAT_ID"
 
----
+sudo bash <(curl -fsSL https://raw.githubusercontent.com/sheikerdc-del/VPS-PRO-MONOLITH/main/vps_monolith.sh)
+```
 
-## 🧰 Полный список сервисов
-
-* System: Update, Swap, Zsh + Oh My Zsh, Utilities (btop, mc, tmux, ncdu, neofetch, jq)
-* Security: SSH Hardening, UFW, Fail2Ban, Unattended-Upgrades
-* Docker: Engine + Compose, Portainer CE, Watchtower
-* PaaS: Coolify, Supabase
-* Proxy: Nginx Proxy Manager, Traefik
-* VPN: Amnezia, MTProto Proxy
-* Monitoring: Uptime Kuma
-* Dev: Node.js, Python, Golang, Rust
-* Database: PostgreSQL, Redis
-* Network: Cloudflare Tunnel, Speedtest-cli
-* Backup: Rclone, Daily PG Dump
+Полностью автоматическая установка всех сервисов.
 
 ---
 
-## 📜 Лицензия
+## Default Ports
 
-MIT License © 2026 YourName
+| Service     | Port     |
+| ----------- | -------- |
+| SSH         | 2222     |
+| Traefik     | 80 / 443 |
+| Coolify     | 8000     |
+| Supabase    | 54321    |
+| Portainer   | 9443     |
+| Uptime Kuma | 3001     |
+| MTProto     | 8443     |
 
 ---
 
-> ✅ Рекомендуется использовать отдельные поддомены для Supabase и Coolify, Traefik автоматически управляет SSL сертификатами через Let's Encrypt.
+## Production Guide
 
+### 1. Используйте домен + DNS
+
+Настройте:
+
+* `A` → IP сервера
+* `*.domain` → IP сервера
+
+Traefik автоматически выпустит SSL.
+
+---
+
+### 2. Сразу настройте бэкапы
+
+Рекомендуется:
+
+* подключить **S3 / Backblaze / Google Drive** через Rclone
+* вынести Postgres-бэкапы за пределы VPS
+
+---
+
+### 3. Ограничьте доступ к админ-панелям
+
+Обязательно:
+
+* закрыть Portainer / Coolify через:
+
+  * VPN
+  * Cloudflare Access
+  * Basic Auth
+
+---
+
+### 4. Обновления
+
+Watchtower обновляет контейнеры автоматически,
+но **ядро и систему** обновляйте вручную:
+
+```bash
+apt update && apt upgrade
+```
+
+---
+
+## Security Disclaimer
+
+Этот скрипт:
+
+* изменяет SSH-порт
+* отключает root-доступ
+* настраивает firewall
+* устанавливает сетевые сервисы
+
+Перед использованием в production:
+
+* проверьте код
+* протестируйте на staging-сервере
+* убедитесь, что у вас есть **резервный доступ к VPS**
+
+Автор **не несёт ответственности** за потерю данных, доступности или безопасности.
+
+---
+
+## Logs
+
+```
+/var/log/vps_monolith.log
+```
+
+Docker-логи ротируются автоматически.
+
+---
+
+## Roadmap
+
+### v1.x
+
+* [ ] install.sh bootstrap
+* [ ] domain auto-setup
+* [ ] backup to S3 wizard
+* [ ] health dashboard
+
+### v2.0
+
+* [ ] multi-node cluster
+* [ ] k3s mode
+* [ ] zero-trust access
+* [ ] web control panel
+
+---
+
+## Contributing
+
+PR и идеи приветствуются.
+
+1. Fork
+2. Feature branch
+3. Pull Request
+
+---
+
+## License
+
+MIT © VPS PRO MONOLITH
+
+---
+
+## Release v1.0
+
+**Первый стабильный релиз:**
+
+* полный bootstrap private cloud
+* interactive + unattended режим
+* production-ready стек
+* базовая безопасность и мониторинг
+
+---
