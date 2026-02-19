@@ -8,6 +8,7 @@ curl -sSL https://raw.githubusercontent.com/sheikerdc-del/VPS-PRO-MONOLITH/main/
 
 > One-shot bootstrap для развёртывания **production-ready private cloud** на чистом Ubuntu-сервере.
 
+![Lint Status](https://github.com/sheikerdc-del/VPS-PRO-MONOLITH/actions/workflows/lint.yml/badge.svg)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Ubuntu](https://img.shields.io/badge/Ubuntu-22.04%20%7C%2024.04-E95420)]()
 [![Docker](https://img.shields.io/badge/Docker-supported-2496ED)]()
