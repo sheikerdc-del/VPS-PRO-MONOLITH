@@ -1,6 +1,5 @@
 # VPS PRO MONOLITH
 
-<img width="1536" height="1024" alt="shema" src="https://github.com/user-attachments/assets/8c81dafb-d26b-42fa-9369-7bc70295b6d4" />
 
 🚀 Запуск
 Bash
@@ -15,6 +14,8 @@ curl -sSL https://raw.githubusercontent.com/sheikerdc-del/VPS-PRO-MONOLITH/main/
 [![Status](https://img.shields.io/badge/status-stable-brightgreen)]()
 [![Release](https://img.shields.io/badge/release-v1.0-informational)]()
 
+
+<img width="1536" height="1024" alt="shema" src="https://github.com/user-attachments/assets/8c81dafb-d26b-42fa-9369-7bc70295b6d4" />
 ---
 
 ## Overview
