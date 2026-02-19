@@ -1,180 +1,300 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -Eeuo pipefail
 
 # ==============================================================================
-# 🚀 VPS ULTIMATE MONOLITH SETUP (25+ TOOLS)
-# Полнофункциональный скрипт автоматизации для Ubuntu 22.04 / 24.04
+# 🚀 VPS ULTIMATE ENTERPRISE BOOTSTRAP (INTERACTIVE)
+# Ubuntu 22.04 / 24.04
 # ==============================================================================
 
-# Цвета для интерфейса
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m'
-
-# Логирование всего процесса
-LOG_FILE="/var/log/vps_setup.log"
+LOG_FILE="/var/log/vps_bootstrap.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
-clear
-echo -e "${GREEN}=============================================="
-echo -e "   🌐 VPS MASTER SETUP: ULTIMATE EDITION"
-echo -e "==============================================${NC}"
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
 
-# Проверка на права root
-if [[ $EUID -ne 0 ]]; then
-   echo -e "${RED}Ошибка: Запустите скрипт от имени root (sudo -i)${NC}"
-   exit 1
-fi
+echo -e "${GREEN}=== VPS ULTIMATE ENTERPRISE BOOTSTRAP START ===${NC}"
 
-# Настройка Telegram уведомлений
-echo -e "${YELLOW}--- Уведомления в Telegram ---${NC}"
-read -p "Введите Bot Token (пропустите, если не нужно): " TG_TOKEN
-read -p "Введите Chat ID: " TG_CHAT_ID
+[[ $EUID -ne 0 ]] && { echo -e "${RED}Run as root (sudo -i)${NC}"; exit 1; }
 
-declare -A apps
+# ------------------------------------------------------------------------------
+# CONFIG
+# ------------------------------------------------------------------------------
+DEPLOY_USER="deploy"
+SSH_PORT="2222"
+BACKUP_DIR="/opt/backups"
+RETENTION_DAYS="7"
 
-# Функция для опроса
+# ------------------------------------------------------------------------------
+# HELPER: ASK FUNCTION
+# ------------------------------------------------------------------------------
 ask() {
-    read -p "$(echo -e ${YELLOW}"$1 (y/n): "${NC})" res
-    if [[ "$res" == "y" ]]; then return 0; else return 1; fi
+  read -rp "$(echo -e "${YELLOW}$1 (y/n): ${NC}")" ans
+  [[ "$ans" == "y" || "$ans" == "Y" ]]
 }
 
-echo -e "\n${GREEN}--- [1] СИСТЕМА, ТЕРМИНАЛ И UX ---${NC}"
-if ask "Установить базу (curl, git, wget, build-essential, htop)"; then apps[base]=1; fi
-if ask "Настроить SWAP (2GB) для стабильности"; then apps[swap]=1; fi
-if ask "Установить Zsh + Oh My Zsh (удобная оболочка)"; then apps[zsh]=1; fi
-if ask "Сменить SSH порт на 2222 (безопасность)"; then apps[ssh]=1; fi
-if ask "Установить Btop, Tmux, Ncdu, MC, Neofetch"; then apps[utils]=1; fi
+# ------------------------------------------------------------------------------
+# TELEGRAM
+# ------------------------------------------------------------------------------
+echo -e "${YELLOW}Telegram notifications (optional)${NC}"
+read -rp "Bot token: " TG_TOKEN || true
+read -rp "Chat ID: " TG_CHAT || true
 
-echo -e "\n${GREEN}--- [2] DOCKER И ПЛАТФОРМЫ ---${NC}"
-if ask "Установить Docker & Compose (с лимитами логов)"; then apps[docker]=1; fi
-if ask "Установить Coolify (личный Render/Vercel)"; then apps[coolify]=1; fi
-if ask "Установить Portainer (управление Docker в браузере)"; then apps[portainer]=1; fi
-if ask "Установить Uptime Kuma (мониторинг сайтов)"; then apps[kuma]=1; fi
-if ask "Установить Nginx Proxy Manager (админка для доменов)"; then apps[npm]=1; fi
+tg() {
+  [[ -z "${TG_TOKEN:-}" || -z "${TG_CHAT:-}" ]] && return 0
+  curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
+    -d "chat_id=$TG_CHAT&text=$1&parse_mode=Markdown" >/dev/null || true
+}
 
-echo -e "\n${GREEN}--- [3] БЕЗОПАСНОСТЬ И БЭКАПЫ ---${NC}"
-if ask "Настроить UFW Firewall + Fail2Ban"; then apps[sec]=1; fi
-if ask "Установить Unattended-Upgrades (автопатчи безопасности)"; then apps[auto_upd]=1; fi
-if ask "Установить Rclone (бэкапы в облака)"; then apps[rclone]=1; fi
-if ask "Установить ClamAV (антивирус)"; then apps[clamav]=1; fi
-
-echo -e "\n${GREEN}--- [4] ЯЗЫКИ ПРОГРАММИРОВАНИЯ И СУБД ---${NC}"
-if ask "Установить Node.js LTS (NPM)"; then apps[node]=1; fi
-if ask "Установить Python3 + Pip + Venv"; then apps[python]=1; fi
-if ask "Установить Golang (Go)"; then apps[go]=1; fi
-if ask "Установить Rust"; then apps[rust]=1; fi
-if ask "Установить PostgreSQL + Redis (серверы)"; then apps[db]=1; fi
-
-echo -e "\n${GREEN}--- [5] СЕТЕВЫЕ ИНСТРУМЕНТЫ ---${NC}"
-if ask "Развернуть MTProto Proxy (Telegram)"; then apps[mtproto]=1; fi
-if ask "Установить Cloudflare Tunnel (cloudflared)"; then apps[cftunnel]=1; fi
-if ask "Установить Speedtest-cli (тест канала)"; then apps[speedtest]=1; fi
-
-echo -e "\n${GREEN}>>> ЗАПУСК УСТАНОВКИ. ПОЖАЛУЙСТА, ПОДОЖДИТЕ...${NC}\n"
-
-# 1. Base & Swap
-if [[ ${apps[base]} ]]; then
-    apt update && apt upgrade -y
-    apt install -y curl git wget build-essential xxd htop software-properties-common ca-certificates vim nano
+# ------------------------------------------------------------------------------
+# SYSTEM UPDATE
+# ------------------------------------------------------------------------------
+if ask "Update system packages"; then
+  apt update -y
+  apt upgrade -y
 fi
-if [[ ${apps[swap]} ]]; then
-    fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+
+# ------------------------------------------------------------------------------
+# BASE TOOLS
+# ------------------------------------------------------------------------------
+if ask "Install base utilities (curl, git, htop, tmux, etc.)"; then
+  apt install -y \
+    curl wget git vim nano htop tmux ncdu btop mc neofetch jq \
+    ca-certificates software-properties-common build-essential \
+    ufw fail2ban unattended-upgrades logrotate \
+    python3 python3-pip python3-venv \
+    golang-go clamav clamav-daemon \
+    postgresql redis-server speedtest-cli
+fi
+
+# ------------------------------------------------------------------------------
+# SWAP
+# ------------------------------------------------------------------------------
+if ask "Create 2GB swap"; then
+  if ! swapon --show | grep -q /swapfile; then
+    fallocate -l 2G /swapfile
+    chmod 600 /swapfile
+    mkswap /swapfile
+    swapon /swapfile
     echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  fi
 fi
 
-# 2. SSH Hardening
-if [[ ${apps[ssh]} ]]; then
-    sed -i 's/#Port 22/Port 2222/' /etc/ssh/sshd_config
-    systemctl restart ssh
+# ------------------------------------------------------------------------------
+# USER + SSH HARDENING
+# ------------------------------------------------------------------------------
+if ask "Create deploy user and harden SSH"; then
+  id "$DEPLOY_USER" &>/dev/null || {
+    adduser --disabled-password --gecos "" "$DEPLOY_USER"
+    usermod -aG sudo "$DEPLOY_USER"
+  }
+
+  sed -i "s/^#\?Port .*/Port $SSH_PORT/" /etc/ssh/sshd_config
+  sed -i "s/^#\?PermitRootLogin .*/PermitRootLogin no/" /etc/ssh/sshd_config
+  sed -i "s/^#\?PasswordAuthentication .*/PasswordAuthentication no/" /etc/ssh/sshd_config
+
+  sshd -t
+  systemctl restart ssh
 fi
 
-# 3. Zsh & Utils
-if [[ ${apps[zsh]} ]]; then
-    apt install -y zsh
-    sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)" "" --unattended
-fi
-[[ ${apps[utils]} ]] && apt install -y btop tmux ncdu mc neofetch
+# ------------------------------------------------------------------------------
+# FIREWALL + FAIL2BAN
+# ------------------------------------------------------------------------------
+if ask "Configure firewall and Fail2Ban"; then
+  ufw allow "$SSH_PORT"/tcp
+  ufw allow 80/tcp
+  ufw allow 81/tcp
+  ufw allow 443/tcp
+  ufw allow 3001/tcp
+  ufw allow 8000/tcp
+  ufw allow 8443/tcp
+  ufw allow 9000/tcp
+  ufw allow 9443/tcp
+  ufw --force enable
 
-# 4. Docker (с ограничением логов)
-if [[ ${apps[docker]} ]]; then
-    mkdir -p /etc/docker
-    cat <<EOF > /etc/docker/daemon.json
+  cat >/etc/fail2ban/jail.local <<'EOF'
+[sshd]
+enabled = true
+EOF
+
+  systemctl enable fail2ban
+  systemctl restart fail2ban
+fi
+
+# ------------------------------------------------------------------------------
+# DOCKER
+# ------------------------------------------------------------------------------
+if ask "Install Docker"; then
+  if ! command -v docker &>/dev/null; then
+    curl -fsSL https://get.docker.com | sh
+  fi
+
+  systemctl enable docker
+  usermod -aG docker "$DEPLOY_USER"
+
+  mkdir -p /etc/docker
+  cat >/etc/docker/daemon.json <<'EOF'
 {
   "log-driver": "json-file",
   "log-opts": { "max-size": "10m", "max-file": "3" }
 }
 EOF
-    curl -fsSL https://get.docker.com | sh
+
+  systemctl restart docker
 fi
 
-# 5. Platforms
-[[ ${apps[coolify]} ]] && curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash
-if [[ ${apps[portainer]} ]]; then
-    docker volume create portainer_data
-    docker run -d -p 9000:9000 -p 9443:9443 --name portainer --restart always -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce:latest
+# ------------------------------------------------------------------------------
+# NODE + RUST
+# ------------------------------------------------------------------------------
+if ask "Install Node.js LTS"; then
+  curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
+  apt install -y nodejs
 fi
-[[ ${apps[kuma]} ]] && docker run -d --restart always -p 3001:3001 -v uptime-kuma:/app/data --name uptime-kuma louislam/uptime-kuma:1
 
-# 6. Nginx Proxy Manager
-if [[ ${apps[npm]} ]]; then
-    mkdir -p ~/npm && cd ~/npm
-    cat <<EOF > docker-compose.yml
-version: '3.8'
+if ask "Install Rust"; then
+  command -v rustc &>/dev/null || curl https://sh.rustup.rs -sSf | sh -s -- -y
+fi
+
+# ------------------------------------------------------------------------------
+# RCLONE
+# ------------------------------------------------------------------------------
+if ask "Install rclone"; then
+  command -v rclone &>/dev/null || curl https://rclone.org/install.sh | bash
+fi
+
+# ------------------------------------------------------------------------------
+# TRAEFIK
+# ------------------------------------------------------------------------------
+if ask "Deploy Traefik reverse proxy"; then
+  mkdir -p /opt/traefik
+  cat >/opt/traefik/docker-compose.yml <<'EOF'
+version: "3.9"
+services:
+  traefik:
+    image: traefik:v3.0
+    restart: always
+    command:
+      - "--api.dashboard=true"
+      - "--providers.docker=true"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.le.acme.tlschallenge=true"
+      - "--certificatesresolvers.le.acme.email=admin@example.com"
+      - "--certificatesresolvers.le.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./letsencrypt:/letsencrypt"
+EOF
+
+  docker compose -f /opt/traefik/docker-compose.yml up -d || true
+fi
+
+# ------------------------------------------------------------------------------
+# CORE DOCKER APPS
+# ------------------------------------------------------------------------------
+if ask "Install Portainer + Uptime Kuma + Watchtower"; then
+  docker volume create portainer_data >/dev/null || true
+
+  docker run -d --name portainer --restart=always \
+    -p 9000:9000 -p 9443:9443 \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v portainer_data:/data portainer/portainer-ce:latest || true
+
+  docker run -d --name uptime-kuma --restart=always \
+    -p 3001:3001 -v uptime-kuma:/app/data \
+    louislam/uptime-kuma:1 || true
+
+  docker run -d --name watchtower --restart=always \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    containrrr/watchtower --cleanup --interval 3600 || true
+fi
+
+# ------------------------------------------------------------------------------
+# NGINX PROXY MANAGER
+# ------------------------------------------------------------------------------
+if ask "Install Nginx Proxy Manager"; then
+  mkdir -p /opt/npm
+  cat >/opt/npm/docker-compose.yml <<'EOF'
+version: "3.8"
 services:
   app:
-    image: 'jc21/nginx-proxy-manager:latest'
+    image: jc21/nginx-proxy-manager:latest
     restart: unless-stopped
-    ports: [ '80:80', '81:81', '443:443' ]
-    volumes: [ './data:/data', './letsencrypt:/etc/letsencrypt' ]
+    ports:
+      - "80:80"
+      - "81:81"
+      - "443:443"
+    volumes:
+      - "./data:/data"
+      - "./letsencrypt:/etc/letsencrypt"
 EOF
-    docker compose up -d && cd ~
+
+  docker compose -f /opt/npm/docker-compose.yml up -d || true
 fi
 
-# 7. Security & Auto-upgrades
-if [[ ${apps[sec]} ]]; then
-    apt install -y ufw fail2ban
-    ufw allow 2222/tcp && ufw allow 80/tcp && ufw allow 443/tcp && ufw allow 8000/tcp && ufw allow 9443/tcp
-    ufw --force enable
-    systemctl enable fail2ban && systemctl start fail2ban
-fi
-[[ ${apps[auto_upd]} ]] && apt install -y unattended-upgrades && dpkg-reconfigure -plow unattended-upgrades
-[[ ${apps[rclone]} ]] && curl https://rclone.org/install.sh | bash
-[[ ${apps[clamav]} ]] && apt install -y clamav clamav-daemon
-
-# 8. Languages & DB
-if [[ ${apps[node]} ]]; then
-    curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
-    apt install -y nodejs
-fi
-[[ ${apps[python]} ]] && apt install -y python3 python3-pip python3-venv
-[[ ${apps[go]} ]] && apt install -y golang-go
-[[ ${apps[rust]} ]] && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-[[ ${apps[db]} ]] && apt install -y postgresql redis-server
-
-# 9. Net tools
-if [[ ${apps[mtproto]} ]]; then
-    MT_SECRET=$(head -c 16 /dev/urandom | xxd -ps)
-    docker run -d --name mtproto-proxy --restart always -p 8443:443 -e SECRET=$MT_SECRET telegrammessenger/proxy:latest
-fi
-[[ ${apps[cftunnel]} ]] && curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb && dpkg -i cloudflared.deb
-if [[ ${apps[speedtest]} ]]; then
-    curl -s https://packagecloud.io/install/repositories/ookla/speedtest-cli/script.deb.sh | bash && apt install -y speedtest
+# ------------------------------------------------------------------------------
+# COOLIFY
+# ------------------------------------------------------------------------------
+if ask "Install Coolify PaaS"; then
+  curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash || true
 fi
 
-# Финализация и Telegram отчет
-IP=$(curl -s ifconfig.me)
-REPORT="✅ *VPS SETUP COMPLETE*%0A%0A🌐 *IP:* \`$IP\`%0A🔑 *SSH Port:* \`2222\`%0A%0A"
-[[ ${apps[coolify]} ]] && REPORT+="🚀 *Coolify:* \`http://$IP:8000\`%0A"
-[[ ${apps[portainer]} ]] && REPORT+="🐳 *Portainer:* \`https://$IP:9443\`%0A"
-[[ ${apps[mtproto]} ]] && REPORT+="🛡 *MTProto Secret:* \`$MT_SECRET\`%0A"
+# ------------------------------------------------------------------------------
+# MTProto
+# ------------------------------------------------------------------------------
+if ask "Deploy MTProto proxy"; then
+  MT_SECRET=$(head -c 16 /dev/urandom | xxd -ps)
 
-if [[ -n "$TG_TOKEN" && -n "$TG_CHAT_ID" ]]; then
-    curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" -d "chat_id=$TG_CHAT_ID&text=$REPORT&parse_mode=Markdown" > /dev/null
+  docker run -d --name mtproto-proxy --restart always \
+    -p 8443:443 -e SECRET="$MT_SECRET" telegrammessenger/proxy:latest || true
+
+  echo "$MT_SECRET" > /root/mtproto_secret.txt
 fi
 
-echo -e "\n${GREEN}=============================================="
-echo -e "🎉 УСТАНОВКА ЗАВЕРШЕНА!"
-echo -e "SSH доступ теперь по порту 2222"
-echo -e "Лог установки: $LOG_FILE"
-echo -e "==============================================${NC}"
+# ------------------------------------------------------------------------------
+# CLOUDFLARED
+# ------------------------------------------------------------------------------
+if ask "Install Cloudflare Tunnel (cloudflared)"; then
+  if ! command -v cloudflared &>/dev/null; then
+    wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+    dpkg -i cloudflared-linux-amd64.deb || apt -f install -y
+  fi
+fi
+
+# ------------------------------------------------------------------------------
+# POSTGRES BACKUP
+# ------------------------------------------------------------------------------
+if ask "Configure PostgreSQL backups"; then
+  mkdir -p "$BACKUP_DIR"
+
+  cat >/usr/local/bin/pg_backup.sh <<EOF
+#!/usr/bin/env bash
+set -e
+DATE=\$(date +%F-%H%M)
+sudo -u postgres pg_dumpall | gzip > "$BACKUP_DIR/pg-\$DATE.sql.gz"
+find "$BACKUP_DIR" -type f -mtime +$RETENTION_DAYS -delete
+EOF
+
+  chmod +x /usr/local/bin/pg_backup.sh
+  (crontab -l 2>/dev/null; echo "0 3 * * * /usr/local/bin/pg_backup.sh") | crontab -
+fi
+
+# ------------------------------------------------------------------------------
+# FINAL REPORT
+# ------------------------------------------------------------------------------
+IP=$(curl -s ifconfig.me || echo "unknown")
+
+MSG="✅ VPS READY
+IP: $IP
+SSH: $SSH_PORT
+Portainer: https://$IP:9443
+Uptime: http://$IP:3001"
+
+tg "$MSG"
+
+echo -e "${GREEN}=== VPS ULTIMATE ENTERPRISE BOOTSTRAP COMPLETE ===${NC}"
+echo "Log: $LOG_FILE"
