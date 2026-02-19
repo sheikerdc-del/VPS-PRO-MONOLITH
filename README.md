@@ -38,7 +38,7 @@
 Просто скопируйте и запустите эту команду на чистом сервере (Ubuntu 22.04+):
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/ВАШ_НИК/ВАШ_РЕПО/main/setup.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/sheikerdc-del/VPS-PRO-MONOLITH/main/setup.sh | sudo bash
 
 ```
 
