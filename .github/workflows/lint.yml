@@ -1,0 +1,32 @@
+name: Lint and Validate
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          scandir: '.'
+          severity: error # Остановит сборку только при критических ошибках
+        env:
+          SHELLCHECK_OPTS: -e SC2181 -e SC2086 # Исключаем мелкие предупреждения для гибкости
+
+  syntax-check:
+    name: Syntax Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Bash Syntax Check
+        run: |
+          bash -n vps_monolith.sh
