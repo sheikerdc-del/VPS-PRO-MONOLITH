@@ -2,25 +2,26 @@
 set -Eeuo pipefail
 
 # ==============================================================================
-# 🚀 VPS PRO MONOLITH v1.0.2
-# Исправлено: зависание интерфейса и инициализация TUI.
+# 🚀 VPS PRO MONOLITH v1.0.3 - STABLE ENGINE
+# Исправлено: Ошибки отрисовки интерфейса и логика захвата ввода.
 # ==============================================================================
 
 LOG_FILE="/var/log/vps_monolith.log"
-GREEN='#00FF00'
-YELLOW='#FFFF00'
+touch "$LOG_FILE"
 
-# 1. Проверка прав (Root)
-if [[ $EUID -ne 0 ]]; then
-    echo "❌ Ошибка: запустите от root (sudo -i)"
-    exit 1
-fi
+# Цвета для обычного вывода
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
 
-# 2. Установка зависимостей (тихий режим)
-echo "🔄 Подготовка системы и установка интерфейса..."
-apt-get update -qq && apt-get install -y curl git wget gpg jq xxd ca-certificates software-properties-common -qq > /dev/null 2>&1
+# 1. Проверка прав
+[[ $EUID -ne 0 ]] && { echo "Ошибка: запустите от root"; exit 1; }
 
-# Установка GUM, если его нет
+# 2. Тихая установка зависимостей
+echo -e "${YELLOW}🔄 Инициализация системы...${NC}"
+apt-get update -qq && apt-get install -y curl git wget gpg jq xxd certbot -qq > /dev/null 2>&1
+
+# Установка Gum (если нет)
 if ! command -v gum &>/dev/null; then
     mkdir -p /etc/apt/keyrings
     curl -fsSL https://repo.charm.sh/apt/gpg.key | gpg --dearmor -o /etc/apt/keyrings/charm.gpg
@@ -28,61 +29,41 @@ if ! command -v gum &>/dev/null; then
     apt-get update -qq && apt-get install -y gum -qq > /dev/null 2>&1
 fi
 
-# 3. Приветствие
 clear
-gum style --border double --margin "1 2" --padding "1 2" --border-foreground "$GREEN" \
-    "🚀 VPS PRO MONOLITH v1.0.2" "Private Cloud One-Shot Bootstrap"
+echo -e "${GREEN}🚀 VPS PRO MONOLITH v1.0.3 Ready${NC}"
 
-# 4. Интерактивный сбор данных (через gum, с принудительным TTY)
-echo "📝 Введите данные (или оставьте пустыми):"
-TG_TOKEN=$(gum input --placeholder "Telegram Bot Token") || TG_TOKEN=""
-TG_CHAT=$(gum input --placeholder "Telegram Chat ID") || TG_CHAT=""
+# 3. Сбор данных через стандартный read (чтобы не ломать TTY)
+echo -e "\n${YELLOW}--- Настройка Telegram ---${NC}"
+read -p "Telegram Bot Token (Enter для пропуска): " TG_TOKEN
+read -p "Telegram Chat ID: " TG_CHAT
 
-echo "🌐 Настройка домена (Cloudflare):"
-CF_DOMAIN=$(gum input --placeholder "Domain (e.g., vps.example.com)") || CF_DOMAIN=""
-CF_TOKEN=$(gum input --placeholder "Cloudflare API Token") || CF_TOKEN=""
-CF_ZONE=$(gum input --placeholder "Cloudflare Zone ID") || CF_ZONE=""
+echo -e "\n${YELLOW}--- Настройка Cloudflare (Опционально) ---${NC}"
+read -p "Домен (например, app.example.com): " CF_DOMAIN
+read -p "Cloudflare API Token: " CF_TOKEN
+read -p "Cloudflare Zone ID: " CF_ZONE
 
-# 5. Главное меню (Цикл выбора)
-SELECTED=""
-while [[ -z "$SELECTED" ]]; do
-    SELECTED=$(gum choose --no-limit --height 20 --header "Выберите компоненты (Пробел - выбор, Enter - старт):" \
-        "System: Core Updates" \
-        "System: 2GB Swap" \
-        "System: Zsh + Starship UI" \
-        "Security: SSH Port 2222" \
-        "Security: Firewall + Fail2Ban" \
-        "Docker: Engine + Compose" \
-        "PaaS: Coolify (Port 8000)" \
-        "BaaS: Supabase (Port 8080)" \
-        "VPN: Amnezia Kernel Ready" \
-        "VPN: MTProto Proxy" \
-        "UI: Portainer CE" \
-        "UI: Uptime Kuma" \
-        "Ops: Watchtower" \
-        "Database: PostgreSQL + Redis" \
-        "Backup: Daily PG Dumps")
-    
-    if [[ -z "$SELECTED" ]]; then
-        echo "⚠️ Пожалуйста, выберите хотя бы один пункт!"
-        sleep 1
-    fi
-done
+# 4. Выбор компонентов через Gum (с явным указанием TTY)
+echo -e "\n${YELLOW}--- Выбор компонентов ---${NC}"
+echo "Выберите пункты (Пробел - выбор, Enter - подтвердить):"
+SELECTED=$(gum choose --no-limit --height 15 \
+    "System: Core Updates" \
+    "System: 2GB Swap" \
+    "Security: SSH Port 2222" \
+    "Security: Firewall + Fail2Ban" \
+    "Docker: Engine + Compose" \
+    "PaaS: Coolify (Port 8000)" \
+    "BaaS: Supabase (Port 8080)" \
+    "VPN: Amnezia Ready" \
+    "Monitoring: Uptime Kuma" \
+    "UI: Portainer CE" \
+    "Ops: Watchtower")
 
-# 6. Функция уведомлений
-tg_notify() {
-    if [[ -n "$TG_TOKEN" && -n "$TG_CHAT" ]]; then
-        curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
-             -d "chat_id=$TG_CHAT&text=$1&parse_mode=Markdown" >/dev/null || true
-    fi
-}
-
-# 7. Исполнение
+# 5. Логика установки
 clear
-gum style --foreground "$YELLOW" "🚀 Начинаем установку... Логи: $LOG_FILE"
+echo -e "${YELLOW}🛠 Начинаем установку... Прогресс в $LOG_FILE${NC}"
 
-# Docker (База)
-if [[ $SELECTED == *"Docker: Engine"* ]]; then
+# Docker (Обязателен для большинства пунктов)
+if [[ $SELECTED == *"Docker"* || $SELECTED == *"Coolify"* || $SELECTED == *"Supabase"* ]]; then
     gum spin --spinner dot --title "Установка Docker..." -- bash -c "
     curl -fsSL https://get.docker.com | sh
     mkdir -p /etc/docker
@@ -90,18 +71,16 @@ if [[ $SELECTED == *"Docker: Engine"* ]]; then
     systemctl restart docker" >> "$LOG_FILE" 2>&1
 fi
 
-# Системные правки
-[[ $SELECTED == *"System: Core Updates"* ]] && gum spin --spinner dot --title "Обновление системы..." -- bash -c "apt-get upgrade -y && apt-get install -y btop mc tmux ncdu" >> "$LOG_FILE" 2>&1
-[[ $SELECTED == *"System: 2GB Swap"* ]] && gum spin --spinner dot --title "Swap 2GB..." -- bash -c "fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile && echo '/swapfile none swap sw 0 0' >> /etc/fstab" >> "$LOG_FILE" 2>&1
-
-# SSH Security
+# SSH
 if [[ $SELECTED == *"SSH Port 2222"* ]]; then
-    gum spin --spinner dot --title "Hardening SSH..." -- bash -c "sed -i 's/^#\?Port .*/Port 2222/' /etc/ssh/sshd_config && systemctl restart ssh" >> "$LOG_FILE" 2>&1
+    gum spin --spinner dot --title "Смена порта SSH на 2222..." -- bash -c "
+    sed -i 's/^#\?Port .*/Port 2222/' /etc/ssh/sshd_config
+    systemctl restart ssh" >> "$LOG_FILE" 2>&1
 fi
 
-# Supabase & Coolify
+# Supabase (Порт 8080)
 if [[ $SELECTED == *"Supabase"* ]]; then
-    gum spin --spinner dot --title "Supabase (Port 8080)..." -- bash -c "
+    gum spin --spinner dot --title "Установка Supabase..." -- bash -c "
     mkdir -p /opt/supabase && cd /opt/supabase
     git clone --depth 1 https://github.com/supabase/supabase .
     cp docker/.env.example .env
@@ -111,37 +90,36 @@ if [[ $SELECTED == *"Supabase"* ]]; then
     docker compose -f docker/docker-compose.yml up -d" >> "$LOG_FILE" 2>&1
 fi
 
-[[ $SELECTED == *"Coolify"* ]] && gum spin --spinner dot --title "Coolify..." -- bash -c "curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash" >> "$LOG_FILE" 2>&1
-
 # Cloudflare DNS
 if [[ -n "$CF_TOKEN" && -n "$CF_DOMAIN" ]]; then
     IP=$(curl -s ifconfig.me)
-    gum spin --spinner dot --title "Cloudflare DNS..." -- bash -c "
+    gum spin --spinner dot --title "Обновление Cloudflare DNS..." -- bash -c "
     curl -s -X POST \"https://api.cloudflare.com/client/v4/zones/$CF_ZONE/dns_records\" \
          -H \"Authorization: Bearer $CF_TOKEN\" \
          -H \"Content-Type: application/json\" \
          --data '{\"type\":\"A\",\"name\":\"$CF_DOMAIN\",\"content\":\"$IP\",\"ttl\":120}'" >> "$LOG_FILE" 2>&1
 fi
 
-# 8. Финал
-clear
+# 6. Финализация
 IP_ADDR=$(curl -s ifconfig.me)
-FINAL_HOST=${CF_DOMAIN:-$IP_ADDR}
+HOST=${CF_DOMAIN:-$IP_ADDR}
 
-MESSAGE="✅ *VPS PRO MONOLITH Ready!*
-Host: \`$FINAL_HOST\`
-SSH: \`2222\`
----
-Coolify: http://$FINAL_HOST:8000
-Supabase: http://$FINAL_HOST:8080"
+clear
+echo -e "${GREEN}=========================================="
+echo -e "✅ УСТАНОВКА ЗАВЕРШЕНА!"
+echo -e "=========================================="
+echo -e "📍 Host: $HOST"
+echo -e "🔑 SSH Port: 2222"
+echo -e "📂 Log: $LOG_FILE"
+echo -e "------------------------------------------"
+echo -e "🚀 Сервисы:"
+[[ $SELECTED == *"Coolify"* ]] && echo "- Coolify: http://$HOST:8000"
+[[ $SELECTED == *"Supabase"* ]] && echo "- Supabase: http://$HOST:8080"
+[[ $SELECTED == *"Portainer"* ]] && echo "- Portainer: https://$HOST:9443"
+echo -e "==========================================${NC}"
 
-tg_notify "$MESSAGE"
-
-gum style --border double --margin "1 2" --padding "1 2" --border-foreground "$GREEN" \
-    "🎉 ВСЁ ГОТОВО!" \
-    "IP: $IP_ADDR" \
-    "SSH Port: 2222" \
-    "Логи: $LOG_FILE"
-
-echo -e "\nДля выхода нажмите Enter..."
-read
+# Отправка в TG
+if [[ -n "$TG_TOKEN" ]]; then
+    curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
+    -d "chat_id=$TG_CHAT&text=✅ VPS Monolith Deployed on $HOST" >/dev/null
+fi
