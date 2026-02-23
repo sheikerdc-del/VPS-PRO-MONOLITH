@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Ошибки не остановят скрипт там, где это не критично
+# Ошибки не остановят скрипт, если переменная пуста
 set -e
 
 # Цвета
@@ -11,7 +11,7 @@ NC='\033[0m'
 
 clear
 echo -e "${GREEN}====================================================${NC}"
-echo -e "${GREEN}       🚀 VPS PRO MONOLITH v1.1.0 - FINAL           ${NC}"
+echo -e "${GREEN}       🚀 VPS PRO MONOLITH v1.1.1 - FULL STACK      ${NC}"
 echo -e "${GREEN}====================================================${NC}"
 
 # 1. Проверка прав
@@ -20,7 +20,7 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-# 2. Функция подтверждения (работает через /dev/tty, чтобы не пролетать вопросы)
+# 2. Функция "Железного" вопроса (читает напрямую из терминала)
 ask() {
     local prompt="$1"
     while true; do
@@ -34,18 +34,21 @@ ask() {
     done
 }
 
-# 3. Сбор данных (Исправлен синтаксис, который ломался на фото 3)
-echo -e "\n${YELLOW}--- Первичная настройка ---${NC}"
-echo -n "Введите ваш домен (или просто Enter для IP): "
-read -r USER_DOMAIN < /dev/tty
+# 3. Сбор данных
+echo -e "\n${YELLOW}--- Настройка сети ---${NC}"
+echo -n "Введите домен (например, app.site.com) или просто нажмите Enter: "
+read -r CF_DOMAIN < /dev/tty
 
-# 4. Процесс установки
-if ask "Обновить систему и установить софт (btop, mc, jq)?"; then
+# 4. Модульная установка
+echo -e "\n${GREEN}--- Выберите инструменты для установки ---${NC}"
+
+# База и Система
+if ask "Обновить систему и поставить софт (btop, mc, jq, tmux, ncdu)?"; then
     apt-get update && apt-get upgrade -y
     apt-get install -y curl git wget gpg jq xxd btop mc tmux ncdu certbot
 fi
 
-if ask "Создать Swap 2GB (нужно для стабильной работы баз данных)?"; then
+if ask "Создать Swap 2GB (необходимо для Supabase и Docker)?"; then
     if [[ ! -f /swapfile ]]; then
         fallocate -l 2G /swapfile && chmod 600 /swapfile
         mkswap /swapfile && swapon /swapfile
@@ -53,6 +56,7 @@ if ask "Создать Swap 2GB (нужно для стабильной рабо
     fi
 fi
 
+# Docker (Обязателен для всего стека)
 if ask "Установить Docker и Docker Compose?"; then
     curl -fsSL https://get.docker.com | sh
     systemctl enable --now docker
@@ -61,25 +65,28 @@ if ask "Установить Docker и Docker Compose?"; then
     systemctl restart docker
 fi
 
-if ask "Сменить порт SSH на 2222?"; then
+# Безопасность
+if ask "Защитить SSH (Порт 2222, отключить Root Login)?"; then
     sed -i 's/^#\?Port .*/Port 2222/' /etc/ssh/sshd_config
+    sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
     systemctl restart ssh
-    echo -e "${RED}ВНИМАНИЕ: Новый порт SSH — 2222!${NC}"
+    echo -e "${RED}ВНИМАНИЕ: Порт SSH изменен на 2222!${NC}"
 fi
 
-if ask "Установить Coolify?"; then
+# PaaS Coolify
+if ask "Установить Coolify (управление вашими приложениями)?"; then
     curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash
 fi
 
+# BaaS Supabase
 if ask "Развернуть Supabase на порту 8080?"; then
     echo "Настройка Supabase..."
-    # Очистка старой папки (решает ошибку с фото 5)
-    rm -rf /opt/supabase
+    rm -rf /opt/supabase  # Очистка старой папки (решает ошибку с фото 5)
     mkdir -p /opt/supabase && cd /opt/supabase
     git clone --depth 1 https://github.com/supabase/supabase .
     cp docker/.env.example .env
     
-    # Генерация ключей (решает проблему с фото 4 и 6)
+    # Генерация ключей (решает проблему с фото 4, 6 и 7)
     DB_PASS=$(openssl rand -hex 16)
     JWT_SEC=$(openssl rand -hex 32)
     sed -i 's/KONG_HTTP_PORT=8000/KONG_HTTP_PORT=8080/' .env
@@ -92,8 +99,13 @@ if ask "Развернуть Supabase на порту 8080?"; then
     cd ~
 fi
 
-if ask "Установить Portainer (Управление контейнерами)?"; then
+# Дополнительные инструменты
+if ask "Установить Portainer (управление контейнерами)?"; then
     docker run -d --name portainer --restart=always -p 9443:9443 -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce:latest
+fi
+
+if ask "Установить Uptime Kuma (мониторинг сайтов)?"; then
+    docker run -d --name uptime-kuma --restart=always -p 3001:3001 -v uptime-kuma:/app/data louislam/uptime-kuma:1
 fi
 
 if ask "Настроить Firewall (UFW) и открыть порты?"; then
@@ -103,19 +115,20 @@ if ask "Настроить Firewall (UFW) и открыть порты?"; then
     ufw --force enable
 fi
 
-# 5. Итоговый отчет
+# 5. Финализация
 clear
-IP_ADDR=$(curl -s ifconfig.me || echo "IP_NOT_FOUND")
-FINAL_HOST=${USER_DOMAIN:-$IP_ADDR}
+IP_ADDR=$(curl -s ifconfig.me || echo "unknown")
+FINAL_HOST=${CF_DOMAIN:-$IP_ADDR}
 
 echo -e "${GREEN}====================================================${NC}"
-echo -e "✅ МОНОЛИТ v1.1.0 УСПЕШНО РАЗВЕРНУТ!"
+echo -e "✅ МОНОЛИТ v1.1.1 РАЗВЕРНУТ!"
 echo -e "====================================================${NC}"
-echo -e "📍 Хост: ${YELLOW}$FINAL_HOST${NC}"
-echo -e "🔑 SSH порт: ${YELLOW}2222${NC}"
+echo -e "📍 Host: ${YELLOW}$FINAL_HOST${NC}"
+echo -e "🔑 SSH Port: ${YELLOW}2222${NC}"
 echo -e "----------------------------------------------------"
-echo -e "🚀 Ваши сервисы:"
+echo -e "🚀 Доступные панели:"
 echo -e "- Coolify:  http://$FINAL_HOST:8000"
 echo -e "- Supabase: http://$FINAL_HOST:8080"
 echo -e "- Portainer: https://$FINAL_HOST:9443"
+echo -e "- Kuma:     http://$FINAL_HOST:3001"
 echo -e "===================================================="
