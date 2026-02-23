@@ -2,124 +2,138 @@
 set -Eeuo pipefail
 
 # ==============================================================================
-# 🚀 VPS PRO MONOLITH v1.0.3 - STABLE ENGINE
-# Исправлено: Ошибки отрисовки интерфейса и логика захвата ввода.
+# 🚀 VPS PRO MONOLITH v1.0.4 - CLASSIC STABLE
+# Repository: https://github.com/sheikerdc-del/VPS-PRO-MONOLITH
+# Чистый Bash: работает на любом SSH-клиенте без графических багов.
 # ==============================================================================
 
 LOG_FILE="/var/log/vps_monolith.log"
-touch "$LOG_FILE"
 
-# Цвета для обычного вывода
+# Цвета для удобства чтения
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+RED='\033[0;31m'
+NC='\033[0m'
 
-# 1. Проверка прав
-[[ $EUID -ne 0 ]] && { echo "Ошибка: запустите от root"; exit 1; }
+# Функция логирования (пишет и в консоль, и в файл)
+log() {
+    echo -e "${GREEN}[$(date +%T)]${NC} $1" | tee -a "$LOG_FILE"
+}
 
-# 2. Тихая установка зависимостей
-echo -e "${YELLOW}🔄 Инициализация системы...${NC}"
-apt-get update -qq && apt-get install -y curl git wget gpg jq xxd certbot -qq > /dev/null 2>&1
+# 1. Начальные проверки
+clear
+echo -e "${GREEN}====================================================${NC}"
+echo -e "${GREEN}       🚀 VPS PRO MONOLITH v1.0.4 - ПОЛНЫЙ СТЕК      ${NC}"
+echo -e "${GREEN}====================================================${NC}"
 
-# Установка Gum (если нет)
-if ! command -v gum &>/dev/null; then
-    mkdir -p /etc/apt/keyrings
-    curl -fsSL https://repo.charm.sh/apt/gpg.key | gpg --dearmor -o /etc/apt/keyrings/charm.gpg
-    echo "deb [signed-by=/etc/apt/keyrings/charm.gpg] https://repo.charm.sh/apt/ * *" > /etc/apt/sources.list.d/charm.list
-    apt-get update -qq && apt-get install -y gum -qq > /dev/null 2>&1
+if [[ $EUID -ne 0 ]]; then
+    echo -e "${RED}Ошибка: запустите скрипт через sudo -i или от root.${NC}"
+    exit 1
 fi
 
-clear
-echo -e "${GREEN}🚀 VPS PRO MONOLITH v1.0.3 Ready${NC}"
+# 2. Функция подтверждения (Классический y/n)
+ask() {
+    echo -ne "${YELLOW}▶ $1 [y/N]? ${NC}"
+    read -r ans
+    case "$ans" in
+        [yY][eE][sS]|[yY]) return 0 ;;
+        *) return 1 ;;
+    esac
+}
 
-# 3. Сбор данных через стандартный read (чтобы не ломать TTY)
-echo -e "\n${YELLOW}--- Настройка Telegram ---${NC}"
+# 3. Сбор переменных перед стартом
+echo -e "\n${YELLOW}--- Ввод необходимых данных ---${NC}"
+read -p "Введите домен (например, app.example.com): " CF_DOMAIN
 read -p "Telegram Bot Token (Enter для пропуска): " TG_TOKEN
 read -p "Telegram Chat ID: " TG_CHAT
 
-echo -e "\n${YELLOW}--- Настройка Cloudflare (Опционально) ---${NC}"
-read -p "Домен (например, app.example.com): " CF_DOMAIN
-read -p "Cloudflare API Token: " CF_TOKEN
-read -p "Cloudflare Zone ID: " CF_ZONE
+# 4. Процесс установки
+echo -e "\n${GREEN}--- Запуск процесса установки ---${NC}"
 
-# 4. Выбор компонентов через Gum (с явным указанием TTY)
-echo -e "\n${YELLOW}--- Выбор компонентов ---${NC}"
-echo "Выберите пункты (Пробел - выбор, Enter - подтвердить):"
-SELECTED=$(gum choose --no-limit --height 15 \
-    "System: Core Updates" \
-    "System: 2GB Swap" \
-    "Security: SSH Port 2222" \
-    "Security: Firewall + Fail2Ban" \
-    "Docker: Engine + Compose" \
-    "PaaS: Coolify (Port 8000)" \
-    "BaaS: Supabase (Port 8080)" \
-    "VPN: Amnezia Ready" \
-    "Monitoring: Uptime Kuma" \
-    "UI: Portainer CE" \
-    "Ops: Watchtower")
+# Обновление и база
+if ask "Обновить систему и поставить базовый софт (btop, mc, jq)?"; then
+    log "Обновление репозиториев..."
+    apt-get update && apt-get upgrade -y >> "$LOG_FILE" 2>&1
+    apt-get install -y curl git wget gpg jq xxd btop mc tmux ncdu certbot >> "$LOG_FILE" 2>&1
+fi
 
-# 5. Логика установки
-clear
-echo -e "${YELLOW}🛠 Начинаем установку... Прогресс в $LOG_FILE${NC}"
+# Swap
+if ask "Создать Swap (файл подкачки) на 2GB?"; then
+    log "Настройка Swap..."
+    if [[ ! -f /swapfile ]]; then
+        fallocate -l 2G /swapfile && chmod 600 /swapfile
+        mkswap /swapfile && swapon /swapfile
+        echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    fi
+fi
 
-# Docker (Обязателен для большинства пунктов)
-if [[ $SELECTED == *"Docker"* || $SELECTED == *"Coolify"* || $SELECTED == *"Supabase"* ]]; then
-    gum spin --spinner dot --title "Установка Docker..." -- bash -c "
-    curl -fsSL https://get.docker.com | sh
+# Docker (критически важен для стека)
+if ask "Установить Docker Engine и Docker Compose?"; then
+    log "Установка Docker..."
+    curl -fsSL https://get.docker.com | sh >> "$LOG_FILE" 2>&1
     mkdir -p /etc/docker
-    echo '{\"log-driver\":\"json-file\",\"log-opts\":{\"max-size\":\"10m\",\"max-file\":\"3\"}}' > /etc/docker/daemon.json
-    systemctl restart docker" >> "$LOG_FILE" 2>&1
+    echo '{"log-driver":"json-file","log-opts":{"max-size":"10m","max-file":"3"}}' > /etc/docker/daemon.json
+    systemctl restart docker
 fi
 
-# SSH
-if [[ $SELECTED == *"SSH Port 2222"* ]]; then
-    gum spin --spinner dot --title "Смена порта SSH на 2222..." -- bash -c "
+# SSH Security
+if ask "Защитить SSH (Порт 2222, отключить root login)?"; then
+    log "Настройка безопасности SSH..."
     sed -i 's/^#\?Port .*/Port 2222/' /etc/ssh/sshd_config
-    systemctl restart ssh" >> "$LOG_FILE" 2>&1
+    sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
+    systemctl restart ssh
+    echo -e "${RED}ВНИМАНИЕ: Теперь подключайтесь по порту 2222!${NC}"
 fi
 
-# Supabase (Порт 8080)
-if [[ $SELECTED == *"Supabase"* ]]; then
-    gum spin --spinner dot --title "Установка Supabase..." -- bash -c "
+# Coolify
+if ask "Установить PaaS Coolify (Self-hosted Heroku)?"; then
+    log "Установка Coolify..."
+    curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash >> "$LOG_FILE" 2>&1
+fi
+
+# Supabase
+if ask "Развернуть Supabase (BaaS) на порту 8080?"; then
+    log "Развертывание Supabase..."
     mkdir -p /opt/supabase && cd /opt/supabase
-    git clone --depth 1 https://github.com/supabase/supabase .
+    git clone --depth 1 https://github.com/supabase/supabase . >> "$LOG_FILE" 2>&1
     cp docker/.env.example .env
     sed -i 's/KONG_HTTP_PORT=8000/KONG_HTTP_PORT=8080/' .env
-    sed -i \"s/POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/\" .env
-    sed -i \"s/JWT_SECRET=.*/JWT_SECRET=$(openssl rand -hex 32)/\" .env
-    docker compose -f docker/docker-compose.yml up -d" >> "$LOG_FILE" 2>&1
+    sed -i "s/POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=$(openssl rand -hex 16)/" .env
+    sed -i "s/JWT_SECRET=.*/JWT_SECRET=$(openssl rand -hex 32)/" .env
+    docker compose -f docker/docker-compose.yml up -d >> "$LOG_FILE" 2>&1
+    cd ~
 fi
 
-# Cloudflare DNS
-if [[ -n "$CF_TOKEN" && -n "$CF_DOMAIN" ]]; then
-    IP=$(curl -s ifconfig.me)
-    gum spin --spinner dot --title "Обновление Cloudflare DNS..." -- bash -c "
-    curl -s -X POST \"https://api.cloudflare.com/client/v4/zones/$CF_ZONE/dns_records\" \
-         -H \"Authorization: Bearer $CF_TOKEN\" \
-         -H \"Content-Type: application/json\" \
-         --data '{\"type\":\"A\",\"name\":\"$CF_DOMAIN\",\"content\":\"$IP\",\"ttl\":120}'" >> "$LOG_FILE" 2>&1
+# Firewall
+if ask "Настроить Firewall (UFW) и разрешить порты сервисов?"; then
+    log "Настройка UFW..."
+    apt-get install -y ufw fail2ban >> "$LOG_FILE" 2>&1
+    ufw allow 2222/tcp
+    ufw allow 80,443,8000,8080,9443,3001/tcp
+    ufw --force enable
+    systemctl restart fail2ban
 fi
 
-# 6. Финализация
-IP_ADDR=$(curl -s ifconfig.me)
+# 5. Финал
+IP_ADDR=$(curl -s ifconfig.me || echo "unknown")
 HOST=${CF_DOMAIN:-$IP_ADDR}
 
 clear
-echo -e "${GREEN}=========================================="
-echo -e "✅ УСТАНОВКА ЗАВЕРШЕНА!"
-echo -e "=========================================="
-echo -e "📍 Host: $HOST"
-echo -e "🔑 SSH Port: 2222"
-echo -e "📂 Log: $LOG_FILE"
-echo -e "------------------------------------------"
-echo -e "🚀 Сервисы:"
-[[ $SELECTED == *"Coolify"* ]] && echo "- Coolify: http://$HOST:8000"
-[[ $SELECTED == *"Supabase"* ]] && echo "- Supabase: http://$HOST:8080"
-[[ $SELECTED == *"Portainer"* ]] && echo "- Portainer: https://$HOST:9443"
-echo -e "==========================================${NC}"
+echo -e "${GREEN}====================================================${NC}"
+echo -e "${GREEN}         ✅ МОНОЛИТ v1.0.4 РАЗВЕРНУТ!               ${NC}"
+echo -e "${GREEN}====================================================${NC}"
+echo -e "📍 Host: ${YELLOW}$HOST${NC}"
+echo -e "🔑 SSH Port: ${YELLOW}2222${NC}"
+echo -e "📂 Полный лог: ${YELLOW}$LOG_FILE${NC}"
+echo -e "----------------------------------------------------"
+echo -e "🚀 Ваши сервисы:"
+echo -e "- Coolify (PaaS):   http://$HOST:8000"
+echo -e "- Supabase (BaaS):  http://$HOST:8080"
+echo -e "- Порт SSH:         2222"
+echo -e "===================================================="
 
-# Отправка в TG
-if [[ -n "$TG_TOKEN" ]]; then
-    curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" \
-    -d "chat_id=$TG_CHAT&text=✅ VPS Monolith Deployed on $HOST" >/dev/null
+# Уведомление в Telegram
+if [[ -n "$TG_TOKEN" && -n "$TG_CHAT" ]]; then
+    MSG="✅ *VPS Monolith v1.0.4 Ready*%0AHost: \`$HOST\`%0ASSH: \`2222\`"
+    curl -s -X POST "https://api.telegram.org/bot$TG_TOKEN/sendMessage" -d "chat_id=$TG_CHAT&text=$MSG&parse_mode=Markdown" > /dev/null
 fi
