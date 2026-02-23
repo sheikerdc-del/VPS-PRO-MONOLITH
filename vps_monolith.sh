@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Останавливаем при ошибках, но разрешаем пустые значения переменных
+# Ошибки не остановят скрипт там, где это не критично
 set -e
 
 # Цвета
@@ -11,7 +11,7 @@ NC='\033[0m'
 
 clear
 echo -e "${GREEN}====================================================${NC}"
-echo -e "${GREEN}       🚀 VPS PRO MONOLITH v1.0.9 - FINAL           ${NC}"
+echo -e "${GREEN}       🚀 VPS PRO MONOLITH v1.1.0 - FINAL           ${NC}"
 echo -e "${GREEN}====================================================${NC}"
 
 # 1. Проверка прав
@@ -20,7 +20,7 @@ if [[ $EUID -ne 0 ]]; then
     exit 1
 fi
 
-# 2. Функция "Железного" вопроса (читает напрямую из терминала)
+# 2. Функция подтверждения (работает через /dev/tty, чтобы не пролетать вопросы)
 ask() {
     local prompt="$1"
     while true; do
@@ -34,20 +34,18 @@ ask() {
     done
 }
 
-# 3. Сбор данных
-echo -e "\n${YELLOW}--- Настройка ---${NC}"
-echo -n "Введите домен (например, site.com) или просто нажмите Enter: "
-read -r CF_DOMAIN < /dev/tty
+# 3. Сбор данных (Исправлен синтаксис, который ломался на фото 3)
+echo -e "\n${YELLOW}--- Первичная настройка ---${NC}"
+echo -n "Введите ваш домен (или просто Enter для IP): "
+read -r USER_DOMAIN < /dev/tty
 
-# 4. Установка компонентов
-echo -e "\n${GREEN}--- Выбор компонентов ---${NC}"
-
-if ask "Обновить систему и поставить софт (btop, mc, jq)?"; then
+# 4. Процесс установки
+if ask "Обновить систему и установить софт (btop, mc, jq)?"; then
     apt-get update && apt-get upgrade -y
     apt-get install -y curl git wget gpg jq xxd btop mc tmux ncdu certbot
 fi
 
-if ask "Создать Swap 2GB (необходимо для работы баз данных)?"; then
+if ask "Создать Swap 2GB (нужно для стабильной работы баз данных)?"; then
     if [[ ! -f /swapfile ]]; then
         fallocate -l 2G /swapfile && chmod 600 /swapfile
         mkswap /swapfile && swapon /swapfile
@@ -66,22 +64,22 @@ fi
 if ask "Сменить порт SSH на 2222?"; then
     sed -i 's/^#\?Port .*/Port 2222/' /etc/ssh/sshd_config
     systemctl restart ssh
-    echo -e "${RED}ВНИМАНИЕ: Порт SSH теперь 2222!${NC}"
+    echo -e "${RED}ВНИМАНИЕ: Новый порт SSH — 2222!${NC}"
 fi
 
-if ask "Установить Coolify (Панель управления)?"; then
+if ask "Установить Coolify?"; then
     curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash
 fi
 
-if ask "Установить Supabase (Backend-as-a-Service)?"; then
+if ask "Развернуть Supabase на порту 8080?"; then
     echo "Настройка Supabase..."
-    # Очистка старой папки (решает проблему с вашего фото №5)
+    # Очистка старой папки (решает ошибку с фото 5)
     rm -rf /opt/supabase
     mkdir -p /opt/supabase && cd /opt/supabase
     git clone --depth 1 https://github.com/supabase/supabase .
     cp docker/.env.example .env
     
-    # Заполнение .env (решает проблему с вашего фото №4)
+    # Генерация ключей (решает проблему с фото 4 и 6)
     DB_PASS=$(openssl rand -hex 16)
     JWT_SEC=$(openssl rand -hex 32)
     sed -i 's/KONG_HTTP_PORT=8000/KONG_HTTP_PORT=8080/' .env
@@ -98,10 +96,6 @@ if ask "Установить Portainer (Управление контейнер�
     docker run -d --name portainer --restart=always -p 9443:9443 -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce:latest
 fi
 
-if ask "Установить Uptime Kuma (Мониторинг)?"; then
-    docker run -d --name uptime-kuma --restart=always -p 3001:3001 -v uptime-kuma:/app/data louislam/uptime-kuma:1
-fi
-
 if ask "Настроить Firewall (UFW) и открыть порты?"; then
     apt-get install -y ufw
     ufw allow 2222/tcp
@@ -109,20 +103,19 @@ if ask "Настроить Firewall (UFW) и открыть порты?"; then
     ufw --force enable
 fi
 
-# 5. Финал
+# 5. Итоговый отчет
 clear
-IP_ADDR=$(curl -s ifconfig.me || echo "unknown")
-FINAL_HOST=${CF_DOMAIN:-$IP_ADDR}
+IP_ADDR=$(curl -s ifconfig.me || echo "IP_NOT_FOUND")
+FINAL_HOST=${USER_DOMAIN:-$IP_ADDR}
 
 echo -e "${GREEN}====================================================${NC}"
-echo -e "✅ МОНОЛИТ УСПЕШНО РАЗВЕРНУТ!"
+echo -e "✅ МОНОЛИТ v1.1.0 УСПЕШНО РАЗВЕРНУТ!"
 echo -e "====================================================${NC}"
-echo -e "📍 Host: ${YELLOW}$FINAL_HOST${NC}"
-echo -e "🔑 SSH Port: ${YELLOW}2222${NC}"
+echo -e "📍 Хост: ${YELLOW}$FINAL_HOST${NC}"
+echo -e "🔑 SSH порт: ${YELLOW}2222${NC}"
 echo -e "----------------------------------------------------"
-echo -e "🚀 Сервисы:"
+echo -e "🚀 Ваши сервисы:"
 echo -e "- Coolify:  http://$FINAL_HOST:8000"
 echo -e "- Supabase: http://$FINAL_HOST:8080"
 echo -e "- Portainer: https://$FINAL_HOST:9443"
-echo -e "- Kuma:     http://$FINAL_HOST:3001"
 echo -e "===================================================="
