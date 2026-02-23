@@ -158,6 +158,7 @@ harden_ssh() {
     echo "PubkeyAuthentication yes" >> "$cfg"; echo "X11Forwarding no" >> "$cfg"; echo "MaxAuthTries 3" >> "$cfg"
     
     if sshd -t 2>/dev/null; then
+        # Ubuntu 24.04: service is 'ssh' not 'sshd'
         systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || service ssh restart 2>/dev/null || true
         sleep 3
         if ss -tlnp 2>/dev/null | grep -q ":${SSH_NEW_PORT} "; then
