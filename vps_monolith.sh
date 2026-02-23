@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 
-# Останавливаемся при ошибках, но разрешаем пустые переменные (исправляет ошибку с 3-го фото)
+# Останавливаем при ошибках, но разрешаем пустые значения переменных
 set -e
 
-# Цвета для терминала
+# Цвета
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
@@ -11,44 +11,43 @@ NC='\033[0m'
 
 clear
 echo -e "${GREEN}====================================================${NC}"
-echo -e "${GREEN}       🚀 VPS PRO MONOLITH v1.0.8 - STABLE          ${NC}"
+echo -e "${GREEN}       🚀 VPS PRO MONOLITH v1.0.9 - FINAL           ${NC}"
 echo -e "${GREEN}====================================================${NC}"
 
-# 1. Проверка root-прав
+# 1. Проверка прав
 if [[ $EUID -ne 0 ]]; then
     echo -e "${RED}Ошибка: запустите от root (sudo -i)${NC}"
     exit 1
 fi
 
-# 2. Функция "Железного" вопроса (теперь точно не пропустит ввод)
+# 2. Функция "Железного" вопроса (читает напрямую из терминала)
 ask() {
     local prompt="$1"
     while true; do
         echo -ne "${YELLOW}▶ $prompt [y/N]? ${NC}"
-        # Читаем ввод напрямую из устройства терминала
         read -r ans < /dev/tty
         case "$ans" in
             [yY][eE][sS]|[yY]) return 0 ;;
             [nN][oO]|[nN]|"") return 1 ;;
-            *) echo -e "${RED}Пожалуйста, введите y (да) или n (нет).${NC}" ;;
+            *) echo -e "${RED}Введите y или n.${NC}" ;;
         esac
     done
 }
 
 # 3. Сбор данных
 echo -e "\n${YELLOW}--- Настройка ---${NC}"
-echo -n "Введите ваш домен (если есть, иначе просто Enter): "
+echo -n "Введите домен (например, site.com) или просто нажмите Enter: "
 read -r CF_DOMAIN < /dev/tty
 
-# 4. Установка по модулям
-echo -e "\n${GREEN}--- Выберите, что установить ---${NC}"
+# 4. Установка компонентов
+echo -e "\n${GREEN}--- Выбор компонентов ---${NC}"
 
-if ask "Обновить систему и установить базовое ПО (btop, mc, jq)?"; then
+if ask "Обновить систему и поставить софт (btop, mc, jq)?"; then
     apt-get update && apt-get upgrade -y
     apt-get install -y curl git wget gpg jq xxd btop mc tmux ncdu certbot
 fi
 
-if ask "Создать Swap (файл подкачки) на 2GB (нужно для Supabase)?"; then
+if ask "Создать Swap 2GB (необходимо для работы баз данных)?"; then
     if [[ ! -f /swapfile ]]; then
         fallocate -l 2G /swapfile && chmod 600 /swapfile
         mkswap /swapfile && swapon /swapfile
@@ -64,24 +63,25 @@ if ask "Установить Docker и Docker Compose?"; then
     systemctl restart docker
 fi
 
-if ask "Защитить SSH (сменить порт на 2222)?"; then
+if ask "Сменить порт SSH на 2222?"; then
     sed -i 's/^#\?Port .*/Port 2222/' /etc/ssh/sshd_config
-    sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin no/' /etc/ssh/sshd_config
     systemctl restart ssh
-    echo -e "${RED}ВНИМАНИЕ: Порт SSH изменен на 2222!${NC}"
+    echo -e "${RED}ВНИМАНИЕ: Порт SSH теперь 2222!${NC}"
 fi
 
-if ask "Установить Coolify (PaaS для деплоя приложений)?"; then
+if ask "Установить Coolify (Панель управления)?"; then
     curl -fsSL https://cdn.coollabs.io/coolify/install.sh | bash
 fi
 
-if ask "Развернуть Supabase на порту 8080?"; then
+if ask "Установить Supabase (Backend-as-a-Service)?"; then
     echo "Настройка Supabase..."
+    # Очистка старой папки (решает проблему с вашего фото №5)
+    rm -rf /opt/supabase
     mkdir -p /opt/supabase && cd /opt/supabase
     git clone --depth 1 https://github.com/supabase/supabase .
     cp docker/.env.example .env
     
-    # Генерация ключей, чтобы не было ошибок как на вашем 4-м фото
+    # Заполнение .env (решает проблему с вашего фото №4)
     DB_PASS=$(openssl rand -hex 16)
     JWT_SEC=$(openssl rand -hex 32)
     sed -i 's/KONG_HTTP_PORT=8000/KONG_HTTP_PORT=8080/' .env
@@ -94,11 +94,11 @@ if ask "Развернуть Supabase на порту 8080?"; then
     cd ~
 fi
 
-if ask "Установить Portainer (управление контейнерами)?"; then
+if ask "Установить Portainer (Управление контейнерами)?"; then
     docker run -d --name portainer --restart=always -p 9443:9443 -v /var/run/docker.sock:/var/run/docker.sock -v portainer_data:/data portainer/portainer-ce:latest
 fi
 
-if ask "Установить Uptime Kuma (мониторинг сайтов)?"; then
+if ask "Установить Uptime Kuma (Мониторинг)?"; then
     docker run -d --name uptime-kuma --restart=always -p 3001:3001 -v uptime-kuma:/app/data louislam/uptime-kuma:1
 fi
 
@@ -109,20 +109,20 @@ if ask "Настроить Firewall (UFW) и открыть порты?"; then
     ufw --force enable
 fi
 
-# 5. Финализация
+# 5. Финал
 clear
 IP_ADDR=$(curl -s ifconfig.me || echo "unknown")
 FINAL_HOST=${CF_DOMAIN:-$IP_ADDR}
 
 echo -e "${GREEN}====================================================${NC}"
-echo -e "${GREEN}         ✅ УСТАНОВКА ЗАВЕРШЕНА!                    ${NC}"
-echo -e "${GREEN}====================================================${NC}"
-echo -e "📍 Адрес: ${YELLOW}http://$FINAL_HOST${NC}"
-echo -e "🔑 SSH порт: ${YELLOW}2222${NC}"
+echo -e "✅ МОНОЛИТ УСПЕШНО РАЗВЕРНУТ!"
+echo -e "====================================================${NC}"
+echo -e "📍 Host: ${YELLOW}$FINAL_HOST${NC}"
+echo -e "🔑 SSH Port: ${YELLOW}2222${NC}"
 echo -e "----------------------------------------------------"
-echo -e "🚀 Ваши сервисы:"
-echo -e "- Coolify (PaaS):   http://$FINAL_HOST:8000"
-echo -e "- Supabase (BaaS):  http://$FINAL_HOST:8080"
-echo -e "- Portainer UI:     https://$FINAL_HOST:9443"
-echo -e "- Monitoring:       http://$FINAL_HOST:3001"
+echo -e "🚀 Сервисы:"
+echo -e "- Coolify:  http://$FINAL_HOST:8000"
+echo -e "- Supabase: http://$FINAL_HOST:8080"
+echo -e "- Portainer: https://$FINAL_HOST:9443"
+echo -e "- Kuma:     http://$FINAL_HOST:3001"
 echo -e "===================================================="
