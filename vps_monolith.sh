@@ -53,6 +53,7 @@ INSTALL_MONITORING="${VPS_INSTALL_MONITORING:-1}"
 INSTALL_MTPROTO="${VPS_INSTALL_MTPROTO:-0}"
 INSTALL_AMNEZIA="${VPS_INSTALL_AMNEZIA:-0}"
 INSTALL_BACKUPS="${VPS_INSTALL_BACKUPS:-1}"
+SKIP_DNS_UPDATE="${VPS_SKIP_DNS:-0}"
 
 # Security
 SSH_DISABLE_ROOT="${VPS_SSH_DISABLE_ROOT:-1}"
@@ -141,6 +142,35 @@ system_prepare() {
         echo 'vm.swappiness=10' >> /etc/sysctl.conf; sysctl -p &>/dev/null || true
     fi
     success "System prepared"
+}
+
+check_dependencies() {
+    step "Checking dependencies"
+
+    local missing=()
+    local required=(curl jq openssl ss awk sed grep systemctl docker)
+
+    for bin in "${required[@]}"; do
+        command_exists "$bin" || missing+=("$bin")
+    done
+
+    if [[ "$INSTALL_BACKUPS" == "1" ]]; then
+        for bin in crontab gzip; do
+            command_exists "$bin" || missing+=("$bin")
+        done
+    fi
+
+    if [[ "$INSTALL_AMNEZIA" == "1" ]]; then
+        for bin in wg iptables; do
+            command_exists "$bin" || missing+=("$bin")
+        done
+    fi
+
+    if (( ${#missing[@]} > 0 )); then
+        die "Missing required dependencies: ${missing[*]}"
+    fi
+
+    success "Dependencies OK"
 }
 
 #-------------------------------------------------------------------------------
@@ -303,7 +333,9 @@ services:
       coolify-redis: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:80"]
-      interval: 30s; timeout: 10s; retries: 5
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   coolify-postgres:
     image: postgres:15-alpine
@@ -311,11 +343,15 @@ services:
     restart: unless-stopped
     volumes: [coolify-pg:/var/lib/postgresql/data]
     environment:
-      POSTGRES_DB: coolify; POSTGRES_USER: coolify; POSTGRES_PASSWORD: ${db_pass}
+      POSTGRES_DB: coolify
+      POSTGRES_USER: coolify
+      POSTGRES_PASSWORD: ${db_pass}
     networks: [monolith]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U coolify"]
-      interval: 10s; timeout: 5s; retries: 5
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   coolify-redis:
     image: redis:7-alpine
@@ -326,7 +362,9 @@ services:
     networks: [monolith]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s; timeout: 5s; retries: 5
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   coolify-data:
@@ -364,12 +402,16 @@ services:
     restart: unless-stopped
     ports: ["${SUPABASE_PORT}:5432"]
     environment:
-      POSTGRES_DB: postgres; POSTGRES_USER: postgres; POSTGRES_PASSWORD: ${db_pass}
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${db_pass}
       JWT_SECRET: ${jwt}
     volumes: [supabase-pg:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres"]
-      interval: 10s; timeout: 5s; retries: 5
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks: [monolith]
 
   auth:
@@ -389,7 +431,9 @@ services:
     networks: [monolith]
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
-      interval: 10s; timeout: 5s; retries: 5
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   rest:
     image: postgrest/postgrest:v12.0.1
@@ -409,14 +453,20 @@ services:
     restart: unless-stopped
     depends_on: [db]
     environment:
-      DB_HOST: db; DB_PORT: 5432; DB_USER: postgres; DB_PASSWORD: ${db_pass}; DB_NAME: postgres
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: ${db_pass}
+      DB_NAME: postgres
       JWT_SECRET: ${jwt}
       REPLICATION_MODE: RLS
       REALTIME_IP_VERSION: "v4"
     networks: [monolith]
     healthcheck:
       test: ["CMD", "bash", "-c", "printf \\0 > /dev/tcp/localhost/4000"]
-      interval: 10s; timeout: 5s; retries: 5
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   storage:
     image: supabase/storage-api:v0.46.4
@@ -424,10 +474,14 @@ services:
     restart: unless-stopped
     depends_on: [db, rest]
     environment:
-      ANON_KEY: ${anon}; SERVICE_KEY: ${svc}
-      POSTGREST_URL: http://rest:3000; PGRST_JWT_SECRET: ${jwt}
+      ANON_KEY: ${anon}
+      SERVICE_KEY: ${svc}
+      POSTGREST_URL: http://rest:3000
+      PGRST_JWT_SECRET: ${jwt}
       DATABASE_URL: postgres://postgres:${db_pass}@db:5432/postgres
-      FILE_SIZE_LIMIT: 52428800; STORAGE_BACKEND: file; FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      FILE_SIZE_LIMIT: 52428800
+      STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
     volumes: [supabase-storage:/var/lib/storage]
     networks: [monolith]
 
@@ -448,7 +502,9 @@ services:
     networks: [monolith]
     healthcheck:
       test: ["CMD", "kong", "health"]
-      interval: 10s; timeout: 10s; retries: 10
+      interval: 10s
+      timeout: 10s
+      retries: 10
 
 volumes:
   supabase-pg:
@@ -660,8 +716,14 @@ EOF
 # CLOUDFLARE DNS — ИСПРАВЛЕНО: upsert logic
 #-------------------------------------------------------------------------------
 update_cloudflare_dns() {
+    [[ "$SKIP_DNS_UPDATE" == "1" ]] && { info "Skipping DNS update (VPS_SKIP_DNS=1)"; return 0; }
     [[ -z "$CF_API_TOKEN" || -z "$DOMAIN_NAME" ]] && return 0
-    [[ ! "$(is_valid_domain "$DOMAIN_NAME")" ]] && { warn "Invalid domain"; return 0; }
+    [[ "$DOMAIN_NAME" == \*.* ]] && DOMAIN_NAME="${DOMAIN_NAME#*.}"
+
+    if ! is_valid_domain "$DOMAIN_NAME"; then
+        warn "Invalid domain"
+        return 0
+    fi
     
     step "Updating Cloudflare DNS"
     local zone_id="$CF_ZONE_ID"
@@ -709,13 +771,24 @@ verify_installation() {
     local running=$(docker ps --format '{{.Names}}' 2>/dev/null | wc -l)
     [[ $running -lt 3 ]] && warn "Only $running containers running"
     
-    for port in 80 443 ${COOLIFY_PORT} ${PORTAINER_PORT} ${UPTIME_KUMA_PORT}; do
+    local ports=(80 443)
+    [[ "$INSTALL_COOLIFY" == "1" ]] && ports+=("${COOLIFY_PORT}")
+    [[ "$INSTALL_MONITORING" == "1" ]] && ports+=("${PORTAINER_PORT}" "${UPTIME_KUMA_PORT}")
+    [[ "$INSTALL_SUPABASE" == "1" ]] && ports+=("${SUPABASE_PORT}")
+    [[ "$INSTALL_MTPROTO" == "1" ]] && ports+=("${MTPROTO_PORT}")
+
+    for port in "${ports[@]}"; do
         ss -tlnp 2>/dev/null | grep -q ":${port} " || warn "Port ${port} not listening"
     done
     
     ss -tlnp 2>/dev/null | grep -q ":${SSH_NEW_PORT} " || { error "SSH port ${SSH_NEW_PORT} not listening"; ((errors++)); }
     
-    for svc in traefik portainer uptime-kuma; do
+    local services=(traefik)
+    [[ "$INSTALL_MONITORING" == "1" ]] && services+=(portainer uptime-kuma)
+    [[ "$INSTALL_COOLIFY" == "1" ]] && services+=(coolify)
+    [[ "$INSTALL_SUPABASE" == "1" ]] && services+=(supabase-db)
+
+    for svc in "${services[@]}"; do
         docker ps --format '{{.Names}}:{{.Status}}' 2>/dev/null | grep -q "^${svc}:.*healthy$\|^${svc}:.*Up" || warn "$svc may not be healthy"
     done
     
@@ -774,6 +847,7 @@ Time: $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
     harden_ssh
     setup_firewall
     install_docker
+    check_dependencies
     setup_traefik
     install_supabase
     install_coolify
