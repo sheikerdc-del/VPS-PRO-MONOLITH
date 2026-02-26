@@ -54,11 +54,6 @@ INSTALL_MTPROTO="${VPS_INSTALL_MTPROTO:-0}"
 INSTALL_AMNEZIA="${VPS_INSTALL_AMNEZIA:-0}"
 INSTALL_BACKUPS="${VPS_INSTALL_BACKUPS:-1}"
 SKIP_DNS_UPDATE="${VPS_SKIP_DNS:-0}"
-DRY_RUN="${VPS_DRY_RUN:-0}"
-STEPS_FILTER="${VPS_STEPS:-all}"
-SSH_ALLOW_CIDR="${VPS_SSH_ALLOW_CIDR:-}"
-ENABLE_TRAEFIK_DASHBOARD="${VPS_ENABLE_TRAEFIK_DASHBOARD:-0}"
-DIAGNOSTICS_FILE="${COMPOSE_DIR}/diagnostics.txt"
 
 # Security
 SSH_DISABLE_ROOT="${VPS_SSH_DISABLE_ROOT:-1}"
@@ -166,41 +161,6 @@ system_prepare() {
         ensure_sysctl vm.swappiness 10
     fi
     success "System prepared"
-}
-
-preflight_checks() {
-    step "Preflight checks"
-
-    [[ $EUID -eq 0 ]] || die "Run as root"
-    command_exists systemctl || die "systemctl is required"
-
-    source /etc/os-release
-    [[ "${ID:-}" == "ubuntu" ]] || die "Unsupported OS: ${ID:-unknown}"
-    [[ "${VERSION_ID:-}" == "22.04" || "${VERSION_ID:-}" == "24.04" ]] || warn "Untested Ubuntu version: ${VERSION_ID:-unknown}"
-
-    local mem_mb disk_gb
-    mem_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
-    disk_gb=$(df -BG / | awk 'NR==2 {gsub("G","",$4); print $4+0}')
-    [[ "$mem_mb" -lt 1500 ]] && warn "Low RAM detected: ${mem_mb}MB"
-    [[ "$disk_gb" -lt 8 ]] && warn "Low free disk space: ${disk_gb}GB"
-
-    for endpoint in https://download.docker.com; do
-        curl -fsSL --connect-timeout 5 "$endpoint" >/dev/null || die "Network check failed: $endpoint"
-    done
-    [[ -n "$TG_TOKEN" && -n "$TG_CHAT" ]] && curl -fsSL --connect-timeout 5 https://api.telegram.org >/dev/null || true
-    [[ "$SKIP_DNS_UPDATE" != "1" && -n "$CF_API_TOKEN" ]] && curl -fsSL --connect-timeout 5 https://api.cloudflare.com >/dev/null || true
-
-    local ports=(80 443 "$SSH_NEW_PORT")
-    [[ "$INSTALL_COOLIFY" == "1" ]] && ports+=("$COOLIFY_PORT")
-    [[ "$INSTALL_MONITORING" == "1" ]] && ports+=("$PORTAINER_PORT" "$UPTIME_KUMA_PORT")
-    [[ "$INSTALL_SUPABASE" == "1" ]] && ports+=("$SUPABASE_PORT")
-    [[ "$INSTALL_MTPROTO" == "1" ]] && ports+=("$MTPROTO_PORT")
-
-    for port in "${ports[@]}"; do
-        ss -tuln | grep -q ":${port} " && warn "Port ${port} already in use before install"
-    done
-
-    success "Preflight checks completed"
 }
 
 check_dependencies() {
@@ -969,23 +929,21 @@ run_installation() {
 Host: \`${SERVER_IP}\`
 Time: $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
     
-    should_run_step preflight_checks && preflight_checks
-    should_run_step system_prepare && system_prepare
-    should_run_step harden_ssh && harden_ssh
-    should_run_step setup_firewall && setup_firewall
-    should_run_step install_docker && install_docker
-    should_run_step check_dependencies && check_dependencies
-    should_run_step setup_traefik && setup_traefik
-    should_run_step install_supabase && install_supabase
-    should_run_step install_coolify && install_coolify
-    should_run_step install_monitoring && install_monitoring
-    should_run_step install_mtproto && install_mtproto
-    should_run_step install_amnezia && install_amnezia
-    should_run_step setup_backups && setup_backups
-    should_run_step update_cloudflare_dns && update_cloudflare_dns
-    should_run_step verify_installation && verify_installation
-    should_run_step collect_diagnostics && collect_diagnostics
-    should_run_step show_summary && show_summary
+    system_prepare
+    harden_ssh
+    setup_firewall
+    install_docker
+    check_dependencies
+    setup_traefik
+    install_supabase
+    install_coolify
+    install_monitoring
+    install_mtproto
+    install_amnezia
+    setup_backups
+    update_cloudflare_dns
+    verify_installation
+    show_summary
 }
 
 main() {

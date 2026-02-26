@@ -125,7 +125,7 @@ export VPS_STEPS="preflight_checks"
 sudo bash vps_monolith.sh
 ```
 
----
+Generated files:
 
 ## Artifacts and logs
 
