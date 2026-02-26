@@ -1,5 +1,23 @@
 # VPS PRO MONOLITH
 
+
+🚀 Запуск
+Bash
+
+curl -sSL [https://raw.githubusercontent.com/sheikerdc-del/VPS-PRO-MONOLITH/main/vps_monolith.sh](https://raw.githubusercontent.com/sheikerdc-del/VPS-PRO-MONOLITH/main/vps_monolith.sh) | sudo bash
+
+> One-shot bootstrap для развёртывания **production-ready private cloud** на чистом Ubuntu-сервере.
+
+![Lint Status](https://github.com/sheikerdc-del/VPS-PRO-MONOLITH/actions/workflows/lint.yml/badge.svg)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Ubuntu](https://img.shields.io/badge/Ubuntu-22.04%20%7C%2024.04-E95420)]()
+[![Docker](https://img.shields.io/badge/Docker-supported-2496ED)]()
+[![Status](https://img.shields.io/badge/status-stable-brightgreen)]()
+[![Release](https://img.shields.io/badge/release-v1.0-informational)]()
+
+
+<img width="1536" height="1024" alt="shema" src="https://github.com/user-attachments/assets/8c81dafb-d26b-42fa-9369-7bc70295b6d4" />
+
 One-shot bootstrap script for deploying a private cloud stack on Ubuntu 22.04 / 24.04.
 
 ## Quick start
