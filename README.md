@@ -1,481 +1,141 @@
 # VPS PRO MONOLITH
 
+Production bootstrap script for Ubuntu 22.04/24.04 to deploy Docker-based private cloud services.
 
-🚀 Запуск
-Bash
-
-curl -sSL [https://raw.githubusercontent.com/sheikerdc-del/VPS-PRO-MONOLITH/main/vps_monolith.sh](https://raw.githubusercontent.com/sheikerdc-del/VPS-PRO-MONOLITH/main/vps_monolith.sh) | sudo bash
-
-> One-shot bootstrap для развёртывания **production-ready private cloud** на чистом Ubuntu-сервере.
-
-![Lint Status](https://github.com/sheikerdc-del/VPS-PRO-MONOLITH/actions/workflows/lint.yml/badge.svg)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Ubuntu](https://img.shields.io/badge/Ubuntu-22.04%20%7C%2024.04-E95420)]()
-[![Docker](https://img.shields.io/badge/Docker-supported-2496ED)]()
-[![Status](https://img.shields.io/badge/status-stable-brightgreen)]()
-[![Release](https://img.shields.io/badge/release-v1.0-informational)]()
-
-
-<img width="1536" height="1024" alt="shema" src="https://github.com/user-attachments/assets/8c81dafb-d26b-42fa-9369-7bc70295b6d4" />
----
-
-# 🌐 Настройка домена *.ru для VPS PRO MONOLITH
-
-Пошаговая инструкция для привязки домена ***.ru** к серверу **185.98.85.85**.
-
----
-
-## 📋 Оглавление
-
-1. [Быстрая настройка (выберите ваш вариант)](#1-быстрая-настройка-выберите-ваш-вариант)
-2. [Вариант 1: Настройка через Cloudflare (рекомендуется)](#2-вариант-1-настройка-через-cloudflare-рекомендуется)
-3. [Вариант 2: Настройка у регистратора домена](#3-вариант-2-настройка-у-регистратора-домена)
-4. [Запуск скрипта с доменом](#4-запуск-скрипта-с-доменом)
-5. [Проверка и диагностика](#5-проверка-и-диагностика)
-6. [Получение SSL-сертификата](#6-получение-ssl-сертификата)
-7. [Частые проблемы](#7-частые-проблемы)
-
----
-
-## 1. Быстрая настройка (выберите ваш вариант)
-
-| Вариант | Сложность | SSL | Защита DDoS | Рекомендация |
-|---------|-----------|-----|-------------|--------------|
-| **Cloudflare** | ⭐ Легко | ✅ Авто | ✅ Есть | **Рекомендуется** |
-| **У регистратора** | ⭐⭐ Средне | ✅ Авто | ❌ Нет | Если не хотите Cloudflare |
-
-> 💡 **Рекомендую Cloudflare** — бесплатно, автоматически, безопасно.
-
----
-
-## 2. Вариант 1: Настройка через Cloudflare (рекомендуется)
-
-### 📍 Шаг 1: Регистрация в Cloudflare
-
-1. Перейдите на [cloudflare.com](https://www.cloudflare.com/)
-2. Нажмите **"Sign Up"** / **"Регистрация"**
-3. Введите email и пароль
-4. Подтвердите email
-
-### 📍 Шаг 2: Добавление домена
-
-1. В панели Cloudflare нажмите **"Add a Domain"**
-2. Введите: `*.ru`
-3. Нажмите **"Continue"**
-4. Выберите **бесплатный тариф (Free)** → **"Continue"**
-
-### 📍 Шаг 3: Смена NS-серверов
-
-Cloudflare покажет вам новые NS-серверы. Пример:
-
-```
-ns1.cloudflare.com
-ns2.cloudflare.com
-```
-
-**Вам нужно заменить NS-серверы у вашего регистратора домена:**
-
-| Регистратор | Где менять NS |
-|-------------|---------------|
-| **Reg.ru** | Домены → *.ru → DNS-серверы → Изменить |
-| **Nic.ru** | Домены → *.ru → Делегирование → Изменить |
-| **Beget** | Домены → *.ru → DNS-серверы → Свои NS |
-| **Timeweb** | Домены → *.ru → Управление → NS-серверы |
-| **Другой** | Ищите раздел "DNS", "Делегирование", "NS-серверы" |
-
-**Пример для Reg.ru:**
-```
-1. Войдите в личный кабинет Reg.ru
-2. Домены → *.ru
-3. DNS-серверы → Изменить
-4. Выберите "Указать свои DNS-серверы"
-5. Впишите NS от Cloudflare
-6. Нажмите "Готово"
-```
-
-> ⏱️ **Важно:** Обновление NS-серверов занимает от 15 минут до 24 часов.
-
-### 📍 Шаг 4: Добавление A-записей в Cloudflare
-
-1. В панели Cloudflare выберите домен `domshe.ru`
-2. Перейдите в раздел **DNS** → **DNS Records**
-3. Нажмите **"Add Record"**
-
-**Добавьте две записи:**
-
-| Тип | Имя (Name) | Содержимое (Content) | Proxy |
-|-----|------------|---------------------|-------|
-| A | `@` | `185.98.85.85` | 🟠 Proxied |
-| A | `*` | `185.98.85.85` | 🟠 Proxied |
-
-**Как это выглядит:**
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  Type  │  Name        │  Content        │  Proxy Status    │
-├─────────────────────────────────────────────────────────────┤
-│   A    │  *.ru   │  185.98.85.85   │  🟠 Proxied      │
-│   A    │  *.*.ru │  185.98.85.85   │  🟠 Proxied      │
-└─────────────────────────────────────────────────────────────┘
-```
-
-> 🟠 **Proxied (оранжевое облако)** — включает защиту Cloudflare и CDN.
-
-### 📍 Шаг 5: Получение API-токена Cloudflare (для скрипта)
-
-Для автоматического обновления DNS скриптом:
-
-1. В Cloudflare перейдите: **My Profile** → **API Tokens**
-2. Нажмите **"Create Token"**
-3. Выберите шаблон: **"Edit zone DNS"**
-4. Нажмите **"Continue to summary"**
-5. Выберите зону: `*.ru`
-6. Нажмите **"Create Token"**
-7. **Скопируйте токен** (показывается один раз!)
-
-Пример токена: `vF5X8kLmN9pQrS2tUvWxYz3A4bC6dE7fG8hI9jK0`
-
-### 📍 Шаг 6: Получение Zone ID
-
-1. В панели Cloudflare выберите домен `domshe.ru`
-2. Прокрутите вниз до **"API"**
-3. Скопируйте **Zone ID**
-
-Пример Zone ID: `abc123xyz456def789ghi012jkl`
-
----
-
-## 3. Вариант 2: Настройка у регистратора домена
-
-Если не хотите использовать Cloudflare.
-
-### 📍 Шаг 1: Войдите в панель регистратора
-
-| Регистратор | Ссылка |
-|-------------|--------|
-| Reg.ru | [reg.ru](https://www.reg.ru/) |
-| Nic.ru | [nic.ru](https://www.nic.ru/) |
-| Beget | [beget.com](https://beget.com/) |
-| Timeweb | [timeweb.ru](https://timeweb.ru/) |
-
-### 📍 Шаг 2: Найдите управление DNS
-
-Ищите разделы:
-- **DNS**
-- **Управление зоной**
-- **DNS-записи**
-- **Редактирование DNS**
-
-### 📍 Шаг 3: Добавьте A-записи
-
-| Тип | Поддомен (Host) | IP-адрес (Value) | TTL |
-|-----|-----------------|------------------|-----|
-| A | `@` или `*.ru` | `185.98.85.85` | 3600 |
-| A | `*` | `185.98.85.85` | 3600 |
-
-**Пример для Reg.ru:**
-```
-1. Домены → *.ru → Управление DNS
-2. Добавить запись → Тип: A
-3. Поддомен: @
-4. IP-адрес: 185.98.85.85
-5. Сохранить
-6. Повторить для поддомена: *
-```
-
-### 📍 Шаг 4: Дождитесь обновления DNS
-
-Обычно занимает **от 15 минут до 24 часов**.
-
----
-
-## 4. Запуск скрипта с доменом
-
-### 🔹 Вариант A: С Cloudflare (полная автоматизация)
+## Quick start
 
 ```bash
-# 1. Установите переменные (замените на ваши!):
-export VPS_UNATTENDED=1
-export VPS_DOMAIN="*.ru"
-export VPS_ADMIN_EMAIL="admin@*.ru"
-export VPS_CF_TOKEN="jhguygjhbghjgjhgjhgjhgyjjygjygjy"
-export VPS_CF_ZONE="abc123xyz456def789ghi012jkl"
-export VPS_TG_TOKEN="123456:ABC-DEF..."        # опционально
-export VPS_TG_CHAT="987654321"                 # опционально
-
-# 2. Запустите установку:
 curl -fsSL https://raw.githubusercontent.com/sheikerdc-del/VPS-PRO-MONOLITH/main/vps_monolith.sh | sudo bash
 ```
 
-### 🔹 Вариант B: Без Cloudflare (только DNS у регистратора)
+## Features
+
+- Docker + Compose plugin installation
+- Traefik reverse proxy with Let's Encrypt
+- Optional stacks: Coolify, Supabase, Monitoring, MTProto, Amnezia VPN
+- UFW + Fail2ban hardening
+- Cloudflare DNS upsert (apex + wildcard)
+- Backup cron for PostgreSQL
+- Diagnostics report generation
+- Dry-run and step-filter execution modes
+
+---
+
+## Environment variables
+
+### Core
+
+| Variable | Default | Description |
+|---|---:|---|
+| `VPS_UNATTENDED` | `0` | `1` = no interactive prompt |
+| `VPS_DOMAIN` | empty | Apex domain only (`example.com`) |
+| `VPS_ADMIN_EMAIL` | `admin@<domain>` | Email for ACME |
+| `VPS_PUBLIC_IP` | auto | Override detected server IP |
+| `VPS_SSH_PORT` | `2222` | SSH port |
+
+### Security and controls
+
+| Variable | Default | Description |
+|---|---:|---|
+| `VPS_SSH_DISABLE_ROOT` | `1` | Disable root login in SSH |
+| `VPS_SSH_DISABLE_PASSWORD` | `1` | Disable password auth in SSH |
+| `VPS_SSH_ALLOW_CIDR` | empty | Optional CIDR allow rule for SSH in UFW |
+| `VPS_ENABLE_TRAEFIK_DASHBOARD` | `0` | Enable Traefik dashboard (non-insecure mode) |
+
+### Integrations
+
+| Variable | Default | Description |
+|---|---:|---|
+| `VPS_TG_TOKEN` | empty | Telegram bot token |
+| `VPS_TG_CHAT` | empty | Telegram chat ID |
+| `VPS_CF_TOKEN` | empty | Cloudflare API token |
+| `VPS_CF_ZONE` | empty | Cloudflare Zone ID (optional) |
+| `VPS_CF_PROXY` | `false` | `true/1` for proxied DNS records |
+| `VPS_SKIP_DNS` | `0` | `1` to skip Cloudflare DNS update step |
+
+### Feature toggles
+
+| Variable | Default | Description |
+|---|---:|---|
+| `VPS_INSTALL_SUPABASE` | `1` | Install Supabase stack |
+| `VPS_INSTALL_COOLIFY` | `1` | Install Coolify |
+| `VPS_INSTALL_MONITORING` | `1` | Install Portainer + Uptime Kuma + Watchtower |
+| `VPS_INSTALL_MTPROTO` | `0` | Install MTProto |
+| `VPS_INSTALL_AMNEZIA` | `0` | Install Amnezia VPN containers |
+| `VPS_INSTALL_BACKUPS` | `1` | Configure daily backup cron |
+
+### Execution controls
+
+| Variable | Default | Description |
+|---|---:|---|
+| `VPS_DRY_RUN` | `0` | `1` = print commands without executing |
+| `VPS_STEPS` | `all` | Comma-separated step names to run selectively |
+
+Available step names:
+
+`preflight_checks,system_prepare,harden_ssh,setup_firewall,install_docker,check_dependencies,setup_traefik,install_supabase,install_coolify,install_monitoring,install_mtproto,install_amnezia,setup_backups,update_cloudflare_dns,verify_installation,collect_diagnostics,show_summary`
+
+---
+
+## Ports
+
+| Service | Port | Protocol |
+|---|---:|---|
+| SSH | `${VPS_SSH_PORT:-2222}` | TCP |
+| Traefik | `80`, `443` | TCP |
+| Coolify | `8000` | TCP |
+| Supabase Postgres | `54321` | TCP |
+| Portainer | `9443` | TCP |
+| Uptime Kuma | `3001` | TCP |
+| MTProto | `8443` | TCP |
+| WireGuard | `51820` | UDP |
+| OpenVPN | `1194` | UDP |
+
+---
+
+## Example: full unattended run
 
 ```bash
-# 1. Установите переменные:
 export VPS_UNATTENDED=1
-export VPS_DOMAIN="*.ru"
-export VPS_ADMIN_EMAIL="admin@*.ru"
-export VPS_SKIP_DNS=1                          # ← не обновлять Cloudflare
-
-# 2. Запустите установку:
-curl -fsSL https://raw.githubusercontent.com/sheikerdc-del/VPS-PRO-MONOLITH/main/vps_monolith.sh | sudo bash
-```
-
-### 🔹 Вариант C: Интерактивный (с вопросами)
-
-```bash
-# 1. Установите только домен:
-export VPS_DOMAIN="*.ru"
-export VPS_ADMIN_EMAIL="admin@*.ru"
-
-# 2. Запустите (скрипт спросит остальное):
-curl -fsSL https://raw.githubusercontent.com/sheikerdc-del/VPS-PRO-MONOLITH/main/vps_monolith.sh | sudo bash
-```
-
----
-
-## 5. Проверка и диагностика
-
-### ✅ Проверка DNS
-
-```bash
-# Проверьте A-запись:
-nslookup *.ru
-
-# Или:
-dig *.ru +short
-
-# Должно вернуть:
-185.98.85.85
-```
-
-### ✅ Проверка поддоменов
-
-```bash
-# Проверьте wildcard:
-nslookup test.*.ru
-
-# Должно вернуть:
-185.98.85.85
-```
-
-### ✅ Проверка SSL
-
-```bash
-# Проверьте сертификат:
-curl -I https://*.ru
-
-# Должно быть:
-HTTP/2 200
-strict-transport-security: max-age=31536000
-```
-
-### ✅ Проверка в браузере
-
-Откройте:
-- `https://*.ru:8000` — Coolify
-- `https://*.ru:9443` — Portainer
-- `https://*.ru:3001` — Uptime Kuma
-
-> ⚠️ **Важно:** После установки скрипт создаст поддомены автоматически:
-> - `coolify.*.ru`
-> - `portainer.*.ru`
-> - `kuma.domshe.ru`
-> - `traefik.*.ru`
-
----
-
-## 6. Получение SSL-сертификата
-
-### 🟢 Автоматически (через скрипт)
-
-Скрипт сам получит SSL-сертификат от Let's Encrypt при установке.
-
-**Требования:**
-- ✅ Домен настроен (A-запись на 185.28.85.85)
-- ✅ Порты 80 и 443 открыты
-- ✅ Email указан в `VPS_ADMIN_EMAIL`
-
-### 🟡 Вручную (если не получилось)
-
-```bash
-# Перезапустите Traefik:
-docker restart traefik
-
-# Проверьте логи:
-docker logs traefik | grep -i "certificate"
-
-# Принудительное получение:
-docker exec traefik traefik --help
-```
-
-### 🔴 Если SSL не работает
-
-```bash
-# 1. Проверьте DNS:
-nslookup domshe.ru
-
-# 2. Проверьте порты:
-ufw status | grep -E "80|443"
-
-# 3. Проверьте логи Traefik:
-docker logs traefik --tail 50
-
-# 4. Перезапустите Traefik:
-docker restart traefik
-
-# 5. Подождите 5-10 минут (Let's Encrypt rate limits)
-```
-
----
-
-## 7. Частые проблемы
-
-### ❌ Проблема: DNS не обновляется
-
-**Причина:** NS-серверы не изменены или кэш DNS.
-
-**Решение:**
-```bash
-# Очистите локальный DNS кэш:
-
-# Windows:
-ipconfig /flushdns
-
-# macOS:
-sudo dscacheutil -flushcache
-
-# Linux:
-sudo systemd-resolve --flush-caches
-
-# Проверьте через онлайн-сервис:
-# https://dnschecker.org/
-```
-
-### ❌ Проблема: SSL не выдаётся
-
-**Причина:** Порт 80 заблокирован или DNS не обновился.
-
-**Решение:**
-```bash
-# Проверьте порт 80:
-curl -I http://domshe.ru
-
-# Разрешите в UFW:
-ufw allow 80/tcp
-ufw allow 443/tcp
-
-# Проверьте Cloudflare (если используете):
-# SSL/TLS → Overview → Full (не Flexible!)
-```
-
-### ❌ Проблема: Cloudflare ошибка 521/522
-
-**Причина:** Сервер не отвечает или SSL режим неверный.
-
-**Решение:**
-1. В Cloudflare: **SSL/TLS** → **Overview** → Выберите **Full** или **Full (Strict)**
-2. Не выбирайте **Flexible** (вызывает редирект-цикл)
-3. Убедитесь что сервер отвечает: `curl -I http://185.98.85.85`
-
-### ❌ Проблема: Поддомены не работают
-
-**Причина:** Нет wildcard A-записи.
-
-**Решение:**
-```
-Добавьте запись в DNS:
-Тип: A
-Имя: *
-Значение: 185.98.85.85
-```
-
-### ❌ Проблема: Скрипт не обновляет Cloudflare DNS
-
-**Причина:** Неверный токен или Zone ID.
-
-**Решение:**
-```bash
-# Проверьте токен:
-curl -X GET "https://api.cloudflare.com/client/v4/user/tokens/verify" \
-  -H "Authorization: Bearer ВАШ_ТОКЕН"
-
-# Должно вернуть: {"success":true,...}
-
-# Проверьте Zone ID:
-curl -X GET "https://api.cloudflare.com/client/v4/zones/ВАШ_ZONE_ID" \
-  -H "Authorization: Bearer ВАШ_ТОКЕН"
-```
-
----
-
-## 📎 Шпаргалка: готовые команды
-
-### Для копирования (Cloudflare)
-
-```bash
-# Сохраните в файл setup.sh:
-#!/bin/bash
-export VPS_UNATTENDED=1
-export VPS_DOMAIN="domshe.ru"
-export VPS_ADMIN_EMAIL="admin@domshe.ru"
-export VPS_CF_TOKEN="ВАШ_ТОКЕН_CLOUDFLARE"
-export VPS_CF_ZONE="ВАШ_ZONE_ID"
-export VPS_SSH_PORT=2222
-export VPS_SERVICES="docker,traefik,coolify,monitoring,security,backups"
+export VPS_DOMAIN="example.com"
+export VPS_ADMIN_EMAIL="admin@example.com"
+export VPS_CF_TOKEN="<token>"
+export VPS_CF_ZONE="<zone_id>"
+export VPS_CF_PROXY=true
 
 curl -fsSL https://raw.githubusercontent.com/sheikerdc-del/VPS-PRO-MONOLITH/main/vps_monolith.sh | sudo bash
 ```
 
-**Запуск:**
-```bash
-chmod +x setup.sh
-sudo ./setup.sh
-```
-
-### Для копирования (без Cloudflare)
+## Example: skip DNS updates
 
 ```bash
 export VPS_UNATTENDED=1
-export VPS_DOMAIN="domshe.ru"
-export VPS_ADMIN_EMAIL="admin@domshe.ru"
+export VPS_DOMAIN="example.com"
+export VPS_ADMIN_EMAIL="admin@example.com"
 export VPS_SKIP_DNS=1
-export VPS_SERVICES="docker,traefik,coolify,monitoring,security,backups"
 
 curl -fsSL https://raw.githubusercontent.com/sheikerdc-del/VPS-PRO-MONOLITH/main/vps_monolith.sh | sudo bash
 ```
 
----
+## Example: dry-run preflight only
 
-## ✅ Финальный чек-лист
-
-```
-□ NS-серверы изменены на Cloudflare (если используете)
-□ A-запись @ → 185.28.85.85 добавлена
-□ A-запись * → 185.28.85.85 добавлена
-□ DNS обновился (проверено через nslookup)
-□ Порты 80 и 443 открыты
-□ VPS_DOMAIN установлен в "domshe.ru"
-□ VPS_ADMIN_EMAIL установлен
-□ VPS_CF_TOKEN и VPS_CF_ZONE (если Cloudflare)
-□ SSH-доступ по порту 2222 проверен
+```bash
+export VPS_DRY_RUN=1
+export VPS_STEPS="preflight_checks"
+sudo bash vps_monolith.sh
 ```
 
 ---
 
-## 🎉 Готово!
+## Artifacts and logs
 
-После установки ваши сервисы будут доступны по:
+- Compose files: `/opt/monolith/`
+- Supabase credentials: `/opt/monolith/supabase-credentials.txt`
+- MTProto info: `/opt/monolith/mtproto-info.txt`
+- Backups: `/opt/monolith-backups/postgres/`
+- Diagnostics: `/opt/monolith/diagnostics.txt`
+- Main log: `/var/log/vps_monolith.log`
 
-| Сервис | URL |
-|--------|-----|
-| **Coolify** | `https://coolify.domshe.ru` |
-| **Portainer** | `https://portainer.domshe.ru` |
-| **Uptime Kuma** | `https://kuma.domshe.ru` |
-| **Traefik Dashboard** | `https://traefik.domshe.ru` |
-| **Supabase** | `postgresql://domshe.ru:54321` |
+## License
 
-**Удачи с развёртыванием! 🚀**
-
----
-
-> ⚠️ **Важно:** После первой установки сохраните все пароли из `/opt/monolith/` и настройте внешние бэкапы!
+MIT

@@ -53,6 +53,12 @@ INSTALL_MONITORING="${VPS_INSTALL_MONITORING:-1}"
 INSTALL_MTPROTO="${VPS_INSTALL_MTPROTO:-0}"
 INSTALL_AMNEZIA="${VPS_INSTALL_AMNEZIA:-0}"
 INSTALL_BACKUPS="${VPS_INSTALL_BACKUPS:-1}"
+SKIP_DNS_UPDATE="${VPS_SKIP_DNS:-0}"
+DRY_RUN="${VPS_DRY_RUN:-0}"
+STEPS_FILTER="${VPS_STEPS:-all}"
+SSH_ALLOW_CIDR="${VPS_SSH_ALLOW_CIDR:-}"
+ENABLE_TRAEFIK_DASHBOARD="${VPS_ENABLE_TRAEFIK_DASHBOARD:-0}"
+DIAGNOSTICS_FILE="${COMPOSE_DIR}/diagnostics.txt"
 
 # Security
 SSH_DISABLE_ROOT="${VPS_SSH_DISABLE_ROOT:-1}"
@@ -70,6 +76,25 @@ step() { log "${CYAN}▶${NC} ${BOLD}$*${NC}"; }
 
 die() { error "$*"; notify_telegram "❌ Failed: $*" 2>/dev/null || true; exit 1; }
 command_exists() { command -v "$1" &>/dev/null; }
+should_run_step() { [[ "$STEPS_FILTER" == "all" || ",${STEPS_FILTER}," == *",$1,"* ]]; }
+run_cmd() { [[ "$DRY_RUN" == "1" ]] && { info "[DRY-RUN] $*"; return 0; }; "$@"; }
+run_or_die() { local desc="$1"; shift; run_cmd "$@" || die "$desc"; }
+ensure_line() { local file="$1" line="$2"; grep -Fxq "$line" "$file" 2>/dev/null || echo "$line" >> "$file"; }
+replace_or_append() {
+    local file="$1" pattern="$2" line="$3"
+    if grep -Eq "$pattern" "$file" 2>/dev/null; then
+        sed -i -E "s|$pattern.*|$line|" "$file"
+    else
+        echo "$line" >> "$file"
+    fi
+}
+ensure_sysctl() {
+    local key="$1" value="$2" cfg="/etc/sysctl.d/99-monolith.conf"
+    touch "$cfg"
+    replace_or_append "$cfg" "^${key}=" "${key}=${value}"
+    run_cmd sysctl -p "$cfg" &>/dev/null || true
+}
+restart_ssh_service() { systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || service ssh restart 2>/dev/null; }
 
 #-------------------------------------------------------------------------------
 # TELEGRAM
@@ -116,16 +141,16 @@ is_valid_domain() { [[ "$1" =~ ^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[
 #-------------------------------------------------------------------------------
 system_prepare() {
     step "System preparation"
-    apt-get update -qq
-    DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
+    run_or_die "apt update failed" apt-get update -qq
+    run_or_die "apt upgrade failed" env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y -qq
     
-    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
+    run_or_die "base packages install failed" env DEBIAN_FRONTEND=noninteractive apt-get install -y -qq \
         curl wget gnupg2 ca-certificates lsb-release jq xxd bc \
         software-properties-common apt-transport-https \
         build-essential libssl-dev pkg-config git \
         ufw fail2ban unzip zip net-tools \
         python3 python3-pip python3-venv nodejs npm \
-        wireguard wireguard-tools openvpn easy-rsa 2>/dev/null || true
+        wireguard wireguard-tools openvpn easy-rsa
 
     mkdir -p "$COMPOSE_DIR" "$BACKUP_DIR/postgres" "/etc/traefik" \
              "/var/log/traefik" "/opt/vpn" "/root/.config/rclone"
@@ -136,11 +161,75 @@ system_prepare() {
     if [[ ! -f /swapfile ]]; then
         info "Creating 4G swap..."
         fallocate -l 4G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=4096 status=none
-        chmod 600 /swapfile; mkswap /swapfile 2>/dev/null; swapon /swapfile 2>/dev/null
-        echo '/swapfile none swap sw 0 0' >> /etc/fstab
-        echo 'vm.swappiness=10' >> /etc/sysctl.conf; sysctl -p &>/dev/null || true
+        chmod 600 /swapfile; mkswap /swapfile 2>/dev/null || true; swapon /swapfile 2>/dev/null || true
+        ensure_line /etc/fstab '/swapfile none swap sw 0 0'
+        ensure_sysctl vm.swappiness 10
     fi
     success "System prepared"
+}
+
+preflight_checks() {
+    step "Preflight checks"
+
+    [[ $EUID -eq 0 ]] || die "Run as root"
+    command_exists systemctl || die "systemctl is required"
+
+    source /etc/os-release
+    [[ "${ID:-}" == "ubuntu" ]] || die "Unsupported OS: ${ID:-unknown}"
+    [[ "${VERSION_ID:-}" == "22.04" || "${VERSION_ID:-}" == "24.04" ]] || warn "Untested Ubuntu version: ${VERSION_ID:-unknown}"
+
+    local mem_mb disk_gb
+    mem_mb=$(awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo)
+    disk_gb=$(df -BG / | awk 'NR==2 {gsub("G","",$4); print $4+0}')
+    [[ "$mem_mb" -lt 1500 ]] && warn "Low RAM detected: ${mem_mb}MB"
+    [[ "$disk_gb" -lt 8 ]] && warn "Low free disk space: ${disk_gb}GB"
+
+    for endpoint in https://download.docker.com; do
+        curl -fsSL --connect-timeout 5 "$endpoint" >/dev/null || die "Network check failed: $endpoint"
+    done
+    [[ -n "$TG_TOKEN" && -n "$TG_CHAT" ]] && curl -fsSL --connect-timeout 5 https://api.telegram.org >/dev/null || true
+    [[ "$SKIP_DNS_UPDATE" != "1" && -n "$CF_API_TOKEN" ]] && curl -fsSL --connect-timeout 5 https://api.cloudflare.com >/dev/null || true
+
+    local ports=(80 443 "$SSH_NEW_PORT")
+    [[ "$INSTALL_COOLIFY" == "1" ]] && ports+=("$COOLIFY_PORT")
+    [[ "$INSTALL_MONITORING" == "1" ]] && ports+=("$PORTAINER_PORT" "$UPTIME_KUMA_PORT")
+    [[ "$INSTALL_SUPABASE" == "1" ]] && ports+=("$SUPABASE_PORT")
+    [[ "$INSTALL_MTPROTO" == "1" ]] && ports+=("$MTPROTO_PORT")
+
+    for port in "${ports[@]}"; do
+        ss -tuln | grep -q ":${port} " && warn "Port ${port} already in use before install"
+    done
+
+    success "Preflight checks completed"
+}
+
+check_dependencies() {
+    step "Checking dependencies"
+
+    local missing=()
+    local required=(curl jq openssl ss awk sed grep systemctl docker)
+
+    for bin in "${required[@]}"; do
+        command_exists "$bin" || missing+=("$bin")
+    done
+
+    if [[ "$INSTALL_BACKUPS" == "1" ]]; then
+        for bin in crontab gzip; do
+            command_exists "$bin" || missing+=("$bin")
+        done
+    fi
+
+    if [[ "$INSTALL_AMNEZIA" == "1" ]]; then
+        for bin in wg iptables; do
+            command_exists "$bin" || missing+=("$bin")
+        done
+    fi
+
+    if (( ${#missing[@]} > 0 )); then
+        die "Missing required dependencies: ${missing[*]}"
+    fi
+
+    success "Dependencies OK"
 }
 
 #-------------------------------------------------------------------------------
@@ -149,26 +238,40 @@ system_prepare() {
 harden_ssh() {
     step "Hardening SSH"
     local cfg="/etc/ssh/sshd_config"
-    cp "$cfg" "${cfg}.bak" 2>/dev/null || true
-    
-    sed -i '/^Port /d' "$cfg" 2>/dev/null; echo "Port ${SSH_NEW_PORT}" >> "$cfg"
-    [[ "$SSH_DISABLE_ROOT" == "1" ]] && sed -i 's/^#\?PermitRootLogin .*/PermitRootLogin no/' "$cfg" 2>/dev/null || echo "PermitRootLogin yes" >> "$cfg"
-    [[ "$SSH_DISABLE_PASSWORD" == "1" ]] && sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication no/' "$cfg" 2>/dev/null || echo "PasswordAuthentication yes" >> "$cfg"
-    
-    echo "PubkeyAuthentication yes" >> "$cfg"; echo "X11Forwarding no" >> "$cfg"; echo "MaxAuthTries 3" >> "$cfg"
-    
-    if sshd -t 2>/dev/null; then
-        # Ubuntu 24.04: service is 'ssh' not 'sshd'
-        systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || service ssh restart 2>/dev/null || true
+    local dropin_dir="/etc/ssh/sshd_config.d"
+    local dropin_file="${dropin_dir}/99-monolith.conf"
+    local candidate="${dropin_file}.candidate"
+
+    mkdir -p "$dropin_dir"
+    cat > "$candidate" << EOF
+Port ${SSH_NEW_PORT}
+PermitRootLogin $([[ "$SSH_DISABLE_ROOT" == "1" ]] && echo no || echo yes)
+PasswordAuthentication $([[ "$SSH_DISABLE_PASSWORD" == "1" ]] && echo no || echo yes)
+PubkeyAuthentication yes
+X11Forwarding no
+MaxAuthTries 3
+EOF
+
+    [[ -n "$SSH_ALLOW_CIDR" ]] && echo "AllowUsers root@${SSH_ALLOW_CIDR}" >> "$candidate"
+
+    cp "$candidate" "$dropin_file"
+    rm -f "$candidate"
+
+    if sshd -t -f "$cfg" 2>/dev/null; then
+        restart_ssh_service || true
         sleep 3
         if ss -tlnp 2>/dev/null | grep -q ":${SSH_NEW_PORT} "; then
             success "SSH hardened (port: ${SSH_NEW_PORT})"
             warn "⚠️ Test: ssh -p ${SSH_NEW_PORT} root@${SERVER_IP}"
         else
-            warn "Port ${SSH_NEW_PORT} not listening, restoring backup"; cp "${cfg}.bak" "$cfg" 2>/dev/null; systemctl restart ssh 2>/dev/null || true
+            warn "Port ${SSH_NEW_PORT} not listening, removing drop-in"
+            rm -f "$dropin_file"
+            restart_ssh_service || true
         fi
     else
-        warn "SSH config invalid"; cp "${cfg}.bak" "$cfg" 2>/dev/null || true
+        warn "SSH config invalid, rolling back drop-in"
+        rm -f "$dropin_file"
+        restart_ssh_service || true
     fi
 }
 
@@ -177,15 +280,22 @@ harden_ssh() {
 #-------------------------------------------------------------------------------
 setup_firewall() {
     step "Configuring firewall"
-    apt-get install -y -qq ufw 2>/dev/null || true
-    ufw --force reset 2>/dev/null; ufw default deny incoming; ufw default allow outgoing
-    
-    ufw allow "${SSH_NEW_PORT}/tcp" 2>/dev/null; ufw allow 80/tcp 2>/dev/null; ufw allow 443/tcp 2>/dev/null
-    ufw allow "${COOLIFY_PORT}/tcp" 2>/dev/null; ufw allow "${PORTAINER_PORT}/tcp" 2>/dev/null
-    ufw allow "${UPTIME_KUMA_PORT}/tcp" 2>/dev/null; ufw allow "${SUPABASE_PORT}/tcp" 2>/dev/null
-    ufw allow "${MTPROTO_PORT}/tcp" 2>/dev/null; ufw allow "${WIREGUARD_PORT}/udp" 2>/dev/null; ufw allow "${OPENVPN_PORT}/udp" 2>/dev/null
-    
-    ufw --force enable 2>/dev/null || true
+    run_or_die "ufw install failed" apt-get install -y -qq ufw
+    run_cmd ufw --force reset
+    run_cmd ufw default deny incoming
+    run_cmd ufw default allow outgoing
+
+    run_cmd ufw allow "${SSH_NEW_PORT}/tcp"
+    [[ -n "$SSH_ALLOW_CIDR" ]] && run_cmd ufw allow from "$SSH_ALLOW_CIDR" to any port "$SSH_NEW_PORT" proto tcp
+    run_cmd ufw allow 80/tcp
+    run_cmd ufw allow 443/tcp
+    [[ "$INSTALL_COOLIFY" == "1" ]] && run_cmd ufw allow "${COOLIFY_PORT}/tcp"
+    [[ "$INSTALL_MONITORING" == "1" ]] && { run_cmd ufw allow "${PORTAINER_PORT}/tcp"; run_cmd ufw allow "${UPTIME_KUMA_PORT}/tcp"; }
+    [[ "$INSTALL_SUPABASE" == "1" ]] && run_cmd ufw allow "${SUPABASE_PORT}/tcp"
+    [[ "$INSTALL_MTPROTO" == "1" ]] && run_cmd ufw allow "${MTPROTO_PORT}/tcp"
+    [[ "$INSTALL_AMNEZIA" == "1" ]] && { run_cmd ufw allow "${WIREGUARD_PORT}/udp"; run_cmd ufw allow "${OPENVPN_PORT}/udp"; }
+
+    run_cmd ufw --force enable
     
     cat > /etc/fail2ban/jail.local << EOF
 [DEFAULT]
@@ -193,7 +303,7 @@ bantime = 3600; findtime = 600; maxretry = 5
 [sshd]
 enabled = true; port = ${SSH_NEW_PORT}; filter = sshd; logpath = /var/log/auth.log; maxretry = 3; bantime = 7200
 EOF
-    systemctl enable --now fail2ban 2>/dev/null || true
+    run_cmd systemctl enable --now fail2ban
     success "Firewall configured"
 }
 
@@ -204,16 +314,17 @@ install_docker() {
     step "Installing Docker"
     command_exists docker && { info "Docker already installed"; return 0; }
     
-    apt-get remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
+    run_cmd apt-get remove -y docker docker-engine docker.io containerd runc
     install -m 0755 -d /etc/apt/keyrings
     curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
     chmod a+r /etc/apt/keyrings/docker.gpg
     echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
     
-    apt-get update -qq; apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin 2>/dev/null
+    run_or_die "docker packages install failed" apt-get update -qq
+    run_or_die "docker packages install failed" apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin
     usermod -aG docker root 2>/dev/null; usermod -aG docker "$SUDO_USER" 2>/dev/null || true
     echo '{"log-driver":"json-file","log-opts":{"max-size":"10m","max-file":"3"}}' > /etc/docker/daemon.json
-    systemctl enable --now docker 2>/dev/null
+    run_or_die "docker service start failed" systemctl enable --now docker
     docker network create monolith 2>/dev/null || true
     success "Docker installed"
 }
@@ -228,8 +339,11 @@ setup_traefik() {
     touch /etc/traefik/acme.json; chmod 600 /etc/traefik/acme.json
     touch /etc/traefik/dynamic.yml
     
+    local dashboard_enabled="false"
+    [[ "$ENABLE_TRAEFIK_DASHBOARD" == "1" ]] && dashboard_enabled="true"
+
     cat > "${COMPOSE_DIR}/traefik.yml" << EOF
-api: {dashboard: true, insecure: true}
+api: {dashboard: ${dashboard_enabled}, insecure: false}
 entryPoints:
   web: {address: ":80", http: {redirections: {entryPoint: {to: websecure, scheme: https}}}}
   websecure: {address: ":443"}
@@ -263,7 +377,8 @@ networks:
 EOF
 
     cd "$COMPOSE_DIR"
-    docker compose -f docker-compose.traefik.yml up -d --quiet-pull 2>/dev/null
+    run_or_die "traefik compose config invalid" docker compose -f docker-compose.traefik.yml config
+    run_or_die "traefik startup failed" docker compose -f docker-compose.traefik.yml up -d --quiet-pull
     wait_port 80 30 || warn "Traefik may not be ready"
     success "Traefik configured"
 }
@@ -303,7 +418,9 @@ services:
       coolify-redis: {condition: service_healthy}
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:80"]
-      interval: 30s; timeout: 10s; retries: 5
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   coolify-postgres:
     image: postgres:15-alpine
@@ -311,11 +428,15 @@ services:
     restart: unless-stopped
     volumes: [coolify-pg:/var/lib/postgresql/data]
     environment:
-      POSTGRES_DB: coolify; POSTGRES_USER: coolify; POSTGRES_PASSWORD: ${db_pass}
+      POSTGRES_DB: coolify
+      POSTGRES_USER: coolify
+      POSTGRES_PASSWORD: ${db_pass}
     networks: [monolith]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U coolify"]
-      interval: 10s; timeout: 5s; retries: 5
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   coolify-redis:
     image: redis:7-alpine
@@ -326,7 +447,9 @@ services:
     networks: [monolith]
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 10s; timeout: 5s; retries: 5
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   coolify-data:
@@ -337,8 +460,9 @@ networks:
 EOF
 
     cd "$COMPOSE_DIR"
-    docker compose -f docker-compose.coolify.yml down 2>/dev/null || true
-    docker compose -f docker-compose.coolify.yml up -d --quiet-pull 2>/dev/null
+    run_cmd docker compose -f docker-compose.coolify.yml down
+    run_or_die "coolify compose config invalid" docker compose -f docker-compose.coolify.yml config
+    run_or_die "coolify startup failed" docker compose -f docker-compose.coolify.yml up -d --quiet-pull
     sleep 15
     wait_container coolify 120 || warn "Coolify may still be starting"
     success "Coolify: http://${SERVER_IP}:${COOLIFY_PORT}"
@@ -364,12 +488,16 @@ services:
     restart: unless-stopped
     ports: ["${SUPABASE_PORT}:5432"]
     environment:
-      POSTGRES_DB: postgres; POSTGRES_USER: postgres; POSTGRES_PASSWORD: ${db_pass}
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${db_pass}
       JWT_SECRET: ${jwt}
     volumes: [supabase-pg:/var/lib/postgresql/data]
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres"]
-      interval: 10s; timeout: 5s; retries: 5
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks: [monolith]
 
   auth:
@@ -389,7 +517,9 @@ services:
     networks: [monolith]
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9999/health"]
-      interval: 10s; timeout: 5s; retries: 5
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   rest:
     image: postgrest/postgrest:v12.0.1
@@ -409,14 +539,20 @@ services:
     restart: unless-stopped
     depends_on: [db]
     environment:
-      DB_HOST: db; DB_PORT: 5432; DB_USER: postgres; DB_PASSWORD: ${db_pass}; DB_NAME: postgres
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: ${db_pass}
+      DB_NAME: postgres
       JWT_SECRET: ${jwt}
       REPLICATION_MODE: RLS
       REALTIME_IP_VERSION: "v4"
     networks: [monolith]
     healthcheck:
       test: ["CMD", "bash", "-c", "printf \\0 > /dev/tcp/localhost/4000"]
-      interval: 10s; timeout: 5s; retries: 5
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   storage:
     image: supabase/storage-api:v0.46.4
@@ -424,10 +560,14 @@ services:
     restart: unless-stopped
     depends_on: [db, rest]
     environment:
-      ANON_KEY: ${anon}; SERVICE_KEY: ${svc}
-      POSTGREST_URL: http://rest:3000; PGRST_JWT_SECRET: ${jwt}
+      ANON_KEY: ${anon}
+      SERVICE_KEY: ${svc}
+      POSTGREST_URL: http://rest:3000
+      PGRST_JWT_SECRET: ${jwt}
       DATABASE_URL: postgres://postgres:${db_pass}@db:5432/postgres
-      FILE_SIZE_LIMIT: 52428800; STORAGE_BACKEND: file; FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      FILE_SIZE_LIMIT: 52428800
+      STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
     volumes: [supabase-storage:/var/lib/storage]
     networks: [monolith]
 
@@ -448,7 +588,9 @@ services:
     networks: [monolith]
     healthcheck:
       test: ["CMD", "kong", "health"]
-      interval: 10s; timeout: 10s; retries: 10
+      interval: 10s
+      timeout: 10s
+      retries: 10
 
 volumes:
   supabase-pg:
@@ -479,7 +621,8 @@ EOF
     chmod 600 "${COMPOSE_DIR}/supabase-credentials.txt"
 
     cd "$COMPOSE_DIR"
-    docker compose -f docker-compose.supabase.yml up -d --quiet-pull 2>/dev/null
+    run_or_die "supabase compose config invalid" docker compose -f docker-compose.supabase.yml config
+    run_or_die "supabase startup failed" docker compose -f docker-compose.supabase.yml up -d --quiet-pull
     wait_container supabase-db 120 || warn "Supabase DB may still be starting"
     success "Supabase: ${SERVER_IP}:${SUPABASE_PORT}"
 }
@@ -546,7 +689,8 @@ networks:
 EOF
 
     cd "$COMPOSE_DIR"
-    docker compose -f docker-compose.monitoring.yml up -d --quiet-pull 2>/dev/null
+    run_or_die "monitoring compose config invalid" docker compose -f docker-compose.monitoring.yml config
+    run_or_die "monitoring startup failed" docker compose -f docker-compose.monitoring.yml up -d --quiet-pull
     success "Monitoring installed"
 }
 
@@ -579,7 +723,8 @@ EOF
     chmod 600 "${COMPOSE_DIR}/mtproto-info.txt"
     
     cd "$COMPOSE_DIR"
-    docker compose -f docker-compose.mtproto.yml up -d --quiet-pull 2>/dev/null
+    run_or_die "mtproto compose config invalid" docker compose -f docker-compose.mtproto.yml config
+    run_or_die "mtproto startup failed" docker compose -f docker-compose.mtproto.yml up -d --quiet-pull
     success "MTProto installed"
 }
 
@@ -590,9 +735,8 @@ install_amnezia() {
     [[ "$INSTALL_AMNEZIA" != "1" ]] && return 0
     step "Installing Amnezia VPN"
     
-    echo 'net.ipv4.ip_forward=1' >> /etc/sysctl.conf
-    echo 'net.ipv6.conf.all.forwarding=1' >> /etc/sysctl.conf
-    sysctl -p &>/dev/null || true
+    ensure_sysctl net.ipv4.ip_forward 1
+    ensure_sysctl net.ipv6.conf.all.forwarding 1
     
     [[ ! -f /opt/vpn/wg_private.key ]] && {
         wg genkey | tee /opt/vpn/wg_private.key 2>/dev/null | wg pubkey > /opt/vpn/wg_public.key 2>/dev/null
@@ -628,7 +772,8 @@ networks:
 EOF
 
     cd "$COMPOSE_DIR"
-    docker compose -f docker-compose.amnezia.yml up -d --quiet-pull 2>/dev/null
+    run_or_die "amnezia compose config invalid" docker compose -f docker-compose.amnezia.yml config
+    run_or_die "amnezia startup failed" docker compose -f docker-compose.amnezia.yml up -d --quiet-pull
     success "Amnezia VPN installed"
     info "Configure via Amnezia app: https://amnezia.org/"
 }
@@ -650,7 +795,7 @@ docker exec "$CONTAINER" pg_dump -U "$DB_USER" "$DB_NAME" 2>/dev/null | gzip > "
 find "$BACKUP_DIR" -name "${DB_NAME}_*.sql.gz" -type f -mtime +7 -delete 2>/dev/null || true
 EOF
     chmod +x /usr/local/bin/monolith-pg-backup
-    (crontab -l 2>/dev/null; echo "0 3 * * * /usr/local/bin/monolith-pg-backup") | crontab - 2>/dev/null || true
+    (crontab -l 2>/dev/null | grep -v 'monolith-pg-backup'; echo "0 3 * * * /usr/local/bin/monolith-pg-backup") | crontab -
     
     [[ -n "${RCLONE_CONFIG:-}" ]] && { echo "$RCLONE_CONFIG" > /root/.config/rclone/rclone.conf; chmod 600 /root/.config/rclone/rclone.conf; }
     success "Backups configured"
@@ -660,8 +805,14 @@ EOF
 # CLOUDFLARE DNS — ИСПРАВЛЕНО: upsert logic
 #-------------------------------------------------------------------------------
 update_cloudflare_dns() {
+    [[ "$SKIP_DNS_UPDATE" == "1" ]] && { info "Skipping DNS update (VPS_SKIP_DNS=1)"; return 0; }
     [[ -z "$CF_API_TOKEN" || -z "$DOMAIN_NAME" ]] && return 0
-    [[ ! "$(is_valid_domain "$DOMAIN_NAME")" ]] && { warn "Invalid domain"; return 0; }
+    [[ "$DOMAIN_NAME" == \*.* ]] && DOMAIN_NAME="${DOMAIN_NAME#*.}"
+
+    if ! is_valid_domain "$DOMAIN_NAME"; then
+        warn "Invalid domain"
+        return 0
+    fi
     
     step "Updating Cloudflare DNS"
     local zone_id="$CF_ZONE_ID"
@@ -672,29 +823,63 @@ update_cloudflare_dns() {
     fi
     [[ -z "$zone_id" || "$zone_id" == "null" ]] && { warn "Could not get Zone ID"; return 0; }
     
-    local existing=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/${zone_id}/dns_records?type=A&name=${DOMAIN_NAME}" \
-        -H "Authorization: Bearer ${CF_API_TOKEN}" 2>/dev/null | jq -r '.result[0].id' 2>/dev/null)
-    
-    local method="POST"; local url="https://api.cloudflare.com/client/v4/zones/${zone_id}/dns_records"
-    [[ -n "$existing" && "$existing" != "null" ]] && { method="PUT"; url="${url}/${existing}"; }
-    
     local proxied="false"; [[ "$CF_PROXY" == "true" || "$CF_PROXY" == "1" ]] && proxied="true"
-    
-    local response
+
+    upsert_cloudflare_a_record "$zone_id" "$DOMAIN_NAME" "$SERVER_IP" "$proxied"
+    upsert_cloudflare_a_record "$zone_id" "*.${DOMAIN_NAME}" "$SERVER_IP" "$proxied"
+}
+
+upsert_cloudflare_a_record() {
+    local zone_id="$1" name="$2" ip="$3" proxied="$4"
+    local existing method url response record_id
+
+    existing=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/${zone_id}/dns_records?type=A&name=${name}" \
+        -H "Authorization: Bearer ${CF_API_TOKEN}" 2>/dev/null | jq -r '.result[0].id // empty' 2>/dev/null)
+
+    method="POST"
+    url="https://api.cloudflare.com/client/v4/zones/${zone_id}/dns_records"
+    if [[ -n "$existing" ]]; then
+        method="PUT"
+        url="${url}/${existing}"
+    fi
+
     response=$(curl -s -X "$method" "$url" \
         -H "Authorization: Bearer ${CF_API_TOKEN}" \
         -H "Content-Type: application/json" \
-        --data "{\"type\":\"A\",\"name\":\"${DOMAIN_NAME}\",\"content\":\"${SERVER_IP}\",\"ttl\":120,\"proxied\":${proxied}}" 2>/dev/null)
-    
-    if echo "$response" | grep -q '"success":true' 2>/dev/null; then
-        success "Cloudflare DNS updated"
-        curl -s -X POST "https://api.cloudflare.com/client/v4/zones/${zone_id}/dns_records" \
-            -H "Authorization: Bearer ${CF_API_TOKEN}" -H "Content-Type: application/json" \
-            --data "{\"type\":\"A\",\"name\":\"*.${DOMAIN_NAME}\",\"content\":\"${SERVER_IP}\",\"ttl\":120,\"proxied\":${proxied}}" &>/dev/null || true
+        --data "{\"type\":\"A\",\"name\":\"${name}\",\"content\":\"${ip}\",\"ttl\":120,\"proxied\":${proxied}}" 2>/dev/null)
+
+    if echo "$response" | jq -e '.success == true' >/dev/null 2>&1; then
+        record_id=$(echo "$response" | jq -r '.result.id // empty' 2>/dev/null)
+        success "Cloudflare A record upserted: ${name} (${record_id:-unknown-id})"
     else
-        local err=$(echo "$response" | jq -r '.errors[0].message' 2>/dev/null || echo "unknown")
-        warn "Cloudflare update failed: $err"
+        local err
+        err=$(echo "$response" | jq -r '.errors[0].message // "unknown"' 2>/dev/null || echo "unknown")
+        warn "Cloudflare upsert failed for ${name}: $err"
     fi
+}
+
+collect_diagnostics() {
+    step "Collecting diagnostics"
+    {
+        echo "=== VPS PRO MONOLITH diagnostics ==="
+        echo "Generated: $(date)"
+        echo
+        echo "# docker ps"
+        docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' 2>&1
+        echo
+        echo "# docker compose ls"
+        docker compose ls 2>&1
+        echo
+        echo "# listening ports"
+        ss -tulpen 2>&1
+        echo
+        echo "# services"
+        systemctl --no-pager --full status docker ssh fail2ban ufw 2>&1 || true
+        echo
+        echo "# ufw status"
+        ufw status verbose 2>&1 || true
+    } > "$DIAGNOSTICS_FILE" 2>/dev/null || true
+    info "Diagnostics saved: $DIAGNOSTICS_FILE"
 }
 
 #-------------------------------------------------------------------------------
@@ -709,15 +894,29 @@ verify_installation() {
     local running=$(docker ps --format '{{.Names}}' 2>/dev/null | wc -l)
     [[ $running -lt 3 ]] && warn "Only $running containers running"
     
-    for port in 80 443 ${COOLIFY_PORT} ${PORTAINER_PORT} ${UPTIME_KUMA_PORT}; do
+    local ports=(80 443)
+    [[ "$INSTALL_COOLIFY" == "1" ]] && ports+=("${COOLIFY_PORT}")
+    [[ "$INSTALL_MONITORING" == "1" ]] && ports+=("${PORTAINER_PORT}" "${UPTIME_KUMA_PORT}")
+    [[ "$INSTALL_SUPABASE" == "1" ]] && ports+=("${SUPABASE_PORT}")
+    [[ "$INSTALL_MTPROTO" == "1" ]] && ports+=("${MTPROTO_PORT}")
+
+    for port in "${ports[@]}"; do
         ss -tlnp 2>/dev/null | grep -q ":${port} " || warn "Port ${port} not listening"
     done
     
     ss -tlnp 2>/dev/null | grep -q ":${SSH_NEW_PORT} " || { error "SSH port ${SSH_NEW_PORT} not listening"; ((errors++)); }
     
-    for svc in traefik portainer uptime-kuma; do
+    local services=(traefik)
+    [[ "$INSTALL_MONITORING" == "1" ]] && services+=(portainer uptime-kuma)
+    [[ "$INSTALL_COOLIFY" == "1" ]] && services+=(coolify)
+    [[ "$INSTALL_SUPABASE" == "1" ]] && services+=(supabase-db)
+
+    for svc in "${services[@]}"; do
         docker ps --format '{{.Names}}:{{.Status}}' 2>/dev/null | grep -q "^${svc}:.*healthy$\|^${svc}:.*Up" || warn "$svc may not be healthy"
     done
+
+    curl -fsS "http://127.0.0.1" >/dev/null 2>&1 || warn "Local HTTP endpoint check failed"
+    curl -kfsS "https://127.0.0.1" >/dev/null 2>&1 || warn "Local HTTPS endpoint check failed"
     
     [[ $errors -eq 0 ]] && success "All checks passed" || warn "$errors checks failed"
 }
@@ -770,20 +969,23 @@ run_installation() {
 Host: \`${SERVER_IP}\`
 Time: $(date '+%Y-%m-%d %H:%M:%S')" 2>/dev/null || true
     
-    system_prepare
-    harden_ssh
-    setup_firewall
-    install_docker
-    setup_traefik
-    install_supabase
-    install_coolify
-    install_monitoring
-    install_mtproto
-    install_amnezia
-    setup_backups
-    update_cloudflare_dns
-    verify_installation
-    show_summary
+    should_run_step preflight_checks && preflight_checks
+    should_run_step system_prepare && system_prepare
+    should_run_step harden_ssh && harden_ssh
+    should_run_step setup_firewall && setup_firewall
+    should_run_step install_docker && install_docker
+    should_run_step check_dependencies && check_dependencies
+    should_run_step setup_traefik && setup_traefik
+    should_run_step install_supabase && install_supabase
+    should_run_step install_coolify && install_coolify
+    should_run_step install_monitoring && install_monitoring
+    should_run_step install_mtproto && install_mtproto
+    should_run_step install_amnezia && install_amnezia
+    should_run_step setup_backups && setup_backups
+    should_run_step update_cloudflare_dns && update_cloudflare_dns
+    should_run_step verify_installation && verify_installation
+    should_run_step collect_diagnostics && collect_diagnostics
+    should_run_step show_summary && show_summary
 }
 
 main() {
